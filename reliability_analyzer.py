@@ -202,7 +202,7 @@ class DataAnalysisApp(tk.Tk):
             
         colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf']
         
-        # 1. Line Charts 섹션 (기존 유지)
+        # 1. Line Charts 섹션
         st_label1 = tk.Label(self.scrollable_frame, text="■ 시간별 데이터 변화 추이 (Line Charts)", font=("Arial", 14, "bold"), fg="#111", pady=10)
         st_label1.pack(anchor="w", padx=10)
         
@@ -263,11 +263,10 @@ class DataAnalysisApp(tk.Tk):
                 except ValueError: pass
             tk.Button(ctrl_f, text="축 조정", font=("Arial", 8), command=apply_axis).pack(side=tk.LEFT, padx=5)
 
-        # 2. Box Plots 섹션 (★프로그램 UI 화면 내 가로 4열 배치 완벽 반영★)
+        # 2. Box Plots 섹션 (가로 4열 배치)
         st_label2 = tk.Label(self.scrollable_frame, text="■ Read-out별 데이터 산포 비교 (Box Plots & Statistics)", font=("Arial", 14, "bold"), fg="#111", pady=15)
         st_label2.pack(anchor="w", padx=10)
         
-        # 프로그램 화면 내부에서 그리드 가로 배치를 담당할 컨테이너
         grid_container = tk.Frame(self.scrollable_frame, bg="#f0f0f0")
         grid_container.pack(fill=tk.X, padx=15, pady=5)
         
@@ -275,7 +274,6 @@ class DataAnalysisApp(tk.Tk):
             row_idx = p_idx // 4
             col_idx = p_idx % 4
             
-            # 개별 컴포넌트 프레임 (그리드 주입)
             box_block = tk.Frame(grid_container, bd=1, relief=tk.GROOVE, pady=10, padx=10, bg="white", width=320)
             box_block.grid(row=row_idx, column=col_idx, padx=8, pady=10, sticky="nsew")
             
@@ -322,22 +320,20 @@ class DataAnalysisApp(tk.Tk):
             ax.grid(True, linestyle=":", alpha=0.4)
             fig.tight_layout()
             
-            # 그래프 배치
             canvas_box = FigureCanvasTkAgg(fig, master=box_block)
             canvas_box_widget = canvas_box.get_tk_widget()
             canvas_box_widget.pack(side=tk.TOP, fill=tk.X)
             canvas_box.draw()
             
-            # 그래프 바로 아래에 통계값 박스 배치
             stat_frame = tk.Frame(box_block, bg="#fafafa", bd=1, relief=tk.SUNKEN, padx=8, pady=8)
             stat_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True, pady=5)
             
             for st_txt in stat_strings:
                 tk.Label(stat_frame, text=st_txt, font=("Consolas", 8), bg="#fafafa", fg="#333", justify=tk.LEFT, anchor="w").pack(fill=tk.X, pady=3)
 
-        # 모든 열이 균등한 가로 사이즈 비율을 갖도록 크기 가중치 보정
+        # ★ 오타 수정 완료: 'column_configure' -> 'grid_columnconfigure'
         for c in range(4):
-            grid_container.column_configure(c, weight=1)
+            grid_container.grid_columnconfigure(c, weight=1)
 
         self.update_undo_button_state()
         if first_trigger:
@@ -429,7 +425,7 @@ class DataAnalysisApp(tk.Tk):
             colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b']
             
             with PdfPages(save_path) as pdf:
-                # Part 1: Line Charts 모아찍기 (한 페이지당 가로 모드 최대 4개)
+                # Part 1: Line Charts 모아찍기
                 for chunk_idx in range(0, len(self.selected_parameters), 4):
                     fig = plt.figure(figsize=(11, 8.5))
                     plt.suptitle("Reliability Trend Report - Line Charts", fontsize=14, weight='bold', y=0.96)
@@ -462,7 +458,7 @@ class DataAnalysisApp(tk.Tk):
                     pdf.savefig(fig)
                     plt.close(fig)
                 
-                # Part 2: Box Plots 모아찍기 (한 페이지당 가로 모드 최대 4개)
+                # Part 2: Box Plots 모아찍기
                 for chunk_idx in range(0, len(self.selected_parameters), 4):
                     fig = plt.figure(figsize=(11, 8.5))
                     plt.suptitle("Reliability Distribution Report - Box Plots", fontsize=14, weight='bold', y=0.96)
