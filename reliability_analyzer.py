@@ -23,7 +23,6 @@ class DataAnalysisApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Reliability Data Analyzer (정밀 데이터 분석 프로그램)")
-        # [수정 완료]: (x) 부분을 올바른 규격인 x로 변경했습니다.
         self.geometry("1400x950")
         
         # 데이터 관리 변수
@@ -145,7 +144,6 @@ class DataAnalysisApp(tk.Tk):
             self.parameter_list = sorted(list(all_detected_params))
             
             popup_prep.destroy()
-            
             self.init_analysis_menu()
             
         except Exception as e:
@@ -326,9 +324,17 @@ class DataAnalysisApp(tk.Tk):
                     break
                     
             if box_data and any(len(b) > 0 for b in box_data):
-                bp = ax.boxplot(box_data, labels=active_labels, patch_artist=True, showmeans=False,
-                                medianprops=dict(color="black", linewidth=1.5),
-                                flierprops=dict(marker='o', markerfacecolor='gray', markersize=4, linestyle='none'))
+                # [수정 핵심]: image_2.png의 에러를 잡기 위해 구버전/신버전 호환용 예외 처리를 적용했습니다.
+                try:
+                    # 최신 Matplotlib 문법 (tick_labels)
+                    bp = ax.boxplot(box_data, tick_labels=active_labels, patch_artist=True, showmeans=False,
+                                    medianprops=dict(color="black", linewidth=1.5),
+                                    flierprops=dict(marker='o', markerfacecolor='gray', markersize=4, linestyle='none'))
+                except TypeError:
+                    # 구버전 Matplotlib 문법 백업 (labels)
+                    bp = ax.boxplot(box_data, labels=active_labels, patch_artist=True, showmeans=False,
+                                    medianprops=dict(color="black", linewidth=1.5),
+                                    flierprops=dict(marker='o', markerfacecolor='gray', markersize=4, linestyle='none'))
                 
                 for patch, color in zip(bp['boxes'], box_colors):
                     patch.set_facecolor(color)
@@ -481,7 +487,10 @@ class DataAnalysisApp(tk.Tk):
                             active_labels.append(filename)
                             
                     if box_data and any(len(b) > 0 for b in box_data):
-                        ax2.boxplot(box_data, labels=active_labels)
+                        try:
+                            ax2.boxplot(box_data, tick_labels=active_labels)
+                        except TypeError:
+                            ax2.boxplot(box_data, labels=active_labels)
                     ax2.set_title(f"{param} [{unit_str}] - Distribution")
                     ax2.grid(True, linestyle=":")
                     plt.xticks(rotation=15)
