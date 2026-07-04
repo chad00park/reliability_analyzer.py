@@ -263,7 +263,7 @@ class DataAnalysisApp(tk.Tk):
                 except ValueError: pass
             tk.Button(ctrl_f, text="축 조정", font=("Arial", 8), command=apply_axis).pack(side=tk.LEFT, padx=5)
 
-        # 2. Box Plots 섹션 (가로 4열 배치)
+        # 2. Box Plots 섹션 (프로그램 화면 내 가로 4열 배치)
         st_label2 = tk.Label(self.scrollable_frame, text="■ Read-out별 데이터 산포 비교 (Box Plots & Statistics)", font=("Arial", 14, "bold"), fg="#111", pady=15)
         st_label2.pack(anchor="w", padx=10)
         
@@ -331,7 +331,6 @@ class DataAnalysisApp(tk.Tk):
             for st_txt in stat_strings:
                 tk.Label(stat_frame, text=st_txt, font=("Consolas", 8), bg="#fafafa", fg="#333", justify=tk.LEFT, anchor="w").pack(fill=tk.X, pady=3)
 
-        # ★ 오타 수정 완료: 'column_configure' -> 'grid_columnconfigure'
         for c in range(4):
             grid_container.grid_columnconfigure(c, weight=1)
 
@@ -425,7 +424,7 @@ class DataAnalysisApp(tk.Tk):
             colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b']
             
             with PdfPages(save_path) as pdf:
-                # Part 1: Line Charts 모아찍기
+                # Part 1: Line Charts 모아찍기 (기존 동일: 한 페이지당 최대 4개)
                 for chunk_idx in range(0, len(self.selected_parameters), 4):
                     fig = plt.figure(figsize=(11, 8.5))
                     plt.suptitle("Reliability Trend Report - Line Charts", fontsize=14, weight='bold', y=0.96)
@@ -458,14 +457,15 @@ class DataAnalysisApp(tk.Tk):
                     pdf.savefig(fig)
                     plt.close(fig)
                 
-                # Part 2: Box Plots 모아찍기
-                for chunk_idx in range(0, len(self.selected_parameters), 4):
+                # ★ Part 2: Box Plots 모아찍기 개편 (한 페이지당 1줄에 4개씩, 2줄 구조 = 총 8개)
+                for chunk_idx in range(0, len(self.selected_parameters), 8):
                     fig = plt.figure(figsize=(11, 8.5))
                     plt.suptitle("Reliability Distribution Report - Box Plots", fontsize=14, weight='bold', y=0.96)
                     
-                    chunk_params = self.selected_parameters[chunk_idx:chunk_idx+4]
+                    chunk_params = self.selected_parameters[chunk_idx:chunk_idx+8]
                     for sub_idx, param in enumerate(chunk_params):
-                        ax = fig.add_subplot(1, 4, sub_idx + 1)
+                        # 2행 4열 구조설정 (sub_idx는 0부터 7까지 순환)
+                        ax = fig.add_subplot(2, 4, sub_idx + 1)
                         
                         box_data, active_labels = [], []
                         for filename in self.sorted_filenames:
