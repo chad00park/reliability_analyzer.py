@@ -70,7 +70,6 @@ class DataAnalysisApp(tk.Tk):
             messagebox.showerror("오류", "파일은 20개 이하이어야 합니다.")
             return
             
-        # '분석 준 비 중' 팝업 표시
         popup_prep = tk.Toplevel(self)
         popup_prep.title("알림")
         popup_prep.geometry("300x120")
@@ -86,12 +85,8 @@ class DataAnalysisApp(tk.Tk):
             temp_files_data = {}
             all_detected_params = set()
             
-            max_units_found = 0
-            max_params_found = 0
-            
             for path in sorted_paths:
                 fname = os.path.basename(path)
-                
                 if fname.endswith('.csv'):
                     df = pd.read_csv(path, header=[0, 1])
                 else:
@@ -99,18 +94,10 @@ class DataAnalysisApp(tk.Tk):
                 
                 num_rows = len(df)
                 num_cols = len(df.columns) - 1
-                
-                if num_rows > max_units_found: max_units_found = num_rows
-                if num_cols > max_params_found: max_params_found = num_cols
                     
-                if num_rows > 500:
+                if num_rows > 500 or num_cols > 100:
                     popup_prep.destroy()
-                    messagebox.showerror("오류", "시료수가 너무 많습니다. 500개 이하만 가능합니다.")
-                    return
-                    
-                if num_cols > 100:
-                    popup_prep.destroy()
-                    messagebox.showerror("오류", "parameter가 너무 많습니다. 100개 이하이어야 합니다.")
+                    messagebox.showerror("오류", "시료수(500이하) 또는 Parameter수(100이하) 제한을 초과했습니다.")
                     return
                 
                 unit_col_name = df.columns[0]
@@ -120,8 +107,6 @@ class DataAnalysisApp(tk.Tk):
                 for col in df.columns[1:]:
                     p_name = col[0]
                     p_unit = col[1] if not pd.isna(col[1]) else ""
-                    
-                    # 파라미터 필터링 (cont, contact 제외)
                     if "cont" in p_name.lower() or "contact" in p_name.lower():
                         continue
                         
@@ -217,6 +202,7 @@ class DataAnalysisApp(tk.Tk):
             
         colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf']
         
+        # 1. Line Charts 섹션 (기존 유지)
         st_label1 = tk.Label(self.scrollable_frame, text="■ 시간별 데이터 변화 추이 (Line Charts)", font=("Arial", 14, "bold"), fg="#111", pady=10)
         st_label1.pack(anchor="w", padx=10)
         
@@ -230,28 +216,19 @@ class DataAnalysisApp(tk.Tk):
             fig, ax = plt.subplots(figsize=(13.0, 1.8))
             
             for f_idx, filename in enumerate(self.sorted_filenames):
-                if param not in self.raw_files_data[filename]['params']:
-                    continue
+                if param not in self.raw_files_data[filename]['params']: continue
                 p_info = self.raw_files_data[filename]['params'][param]
-                
                 x_units = p_info['units_map']
                 y_vals = p_info['values']
                 
-                plot_x = []
-                plot_y = []
-                plot_colors = []
-                
+                plot_x, plot_y, plot_colors = [], [], []
                 for idx, (ux, uy) in enumerate(zip(x_units, y_vals)):
-                    if uy is None or np.isnan(uy):
-                        continue
+                    if uy is None or np.isnan(uy): continue
                     plot_x.append(str(ux))
                     plot_y.append(uy)
                     
                     c_key = (param, filename, str(ux))
-                    if c_key in self.custom_point_colors:
-                        plot_colors.append(self.custom_point_colors[c_key])
-                    else:
-                        plot_colors.append(colors[f_idx % len(colors)])
+                    plot_colors.append(self.custom_point_colors.get(c_key, colors[f_idx % len(colors)]))
             
                 if plot_x:
                     ax.plot(plot_x, plot_y, linestyle='-', color=colors[f_idx % len(colors)], alpha=0.6, zorder=1)
@@ -286,20 +263,27 @@ class DataAnalysisApp(tk.Tk):
                 except ValueError: pass
             tk.Button(ctrl_f, text="축 조정", font=("Arial", 8), command=apply_axis).pack(side=tk.LEFT, padx=5)
 
+        # 2. Box Plots 섹션 (★프로그램 UI 화면 내 가로 4열 배치 완벽 반영★)
         st_label2 = tk.Label(self.scrollable_frame, text="■ Read-out별 데이터 산포 비교 (Box Plots & Statistics)", font=("Arial", 14, "bold"), fg="#111", pady=15)
         st_label2.pack(anchor="w", padx=10)
         
-        for param in self.selected_parameters:
-            fig, ax = plt.subplots(figsize=(4.0, 4.2))
+        # 프로그램 화면 내부에서 그리드 가로 배치를 담당할 컨테이너
+        grid_container = tk.Frame(self.scrollable_frame, bg="#f0f0f0")
+        grid_container.pack(fill=tk.X, padx=15, pady=5)
+        
+        for p_idx, param in enumerate(self.selected_parameters):
+            row_idx = p_idx // 4
+            col_idx = p_idx % 4
             
-            box_data = []
-            active_labels = []
-            box_colors = []
-            stat_strings = []
+            # 개별 컴포넌트 프레임 (그리드 주입)
+            box_block = tk.Frame(grid_container, bd=1, relief=tk.GROOVE, pady=10, padx=10, bg="white", width=320)
+            box_block.grid(row=row_idx, column=col_idx, padx=8, pady=10, sticky="nsew")
+            
+            fig, ax = plt.subplots(figsize=(3.2, 3.2))
+            box_data, active_labels, box_colors, stat_strings = [], [], [], []
             
             for f_idx, filename in enumerate(self.sorted_filenames):
-                if param not in self.raw_files_data[filename]['params']:
-                    continue
+                if param not in self.raw_files_data[filename]['params']: continue
                 p_info = self.raw_files_data[filename]['params'][param]
                 vals = [v for v in p_info['values'] if v is not None and not np.isnan(v)]
                 
@@ -308,14 +292,9 @@ class DataAnalysisApp(tk.Tk):
                 box_colors.append(colors[f_idx % len(colors)])
                 
                 if vals:
-                    p_min = np.min(vals)
-                    p_max = np.max(vals)
-                    p_avg = np.mean(vals)
-                    p_ss = len(vals)
-                    p_std = np.std(vals)
-                    stat_strings.append(f"[{filename}] Min: {p_min:.2f} | Max: {p_max:.2f} | AVG: {p_avg:.2f} | s/s: {p_ss} | STDdev: {p_std:.2f}")
+                    stat_strings.append(f"[{filename}]\nMin:{np.min(vals):.2f} | Max:{np.max(vals):.2f}\nAVG:{np.mean(vals):.2f} | s/s:{len(vals)} | STD:{np.std(vals):.2f}")
                 else:
-                    stat_strings.append(f"[{filename}] No Data Available")
+                    stat_strings.append(f"[{filename}]\nNo Data")
             
             unit_str = ""
             for fn in self.sorted_filenames:
@@ -324,46 +303,43 @@ class DataAnalysisApp(tk.Tk):
                     break
                     
             if box_data and any(len(b) > 0 for b in box_data):
-                # [수정 핵심]: image_2.png의 에러를 잡기 위해 구버전/신버전 호환용 예외 처리를 적용했습니다.
                 try:
-                    # 최신 Matplotlib 문법 (tick_labels)
                     bp = ax.boxplot(box_data, tick_labels=active_labels, patch_artist=True, showmeans=False,
-                                    medianprops=dict(color="black", linewidth=1.5),
-                                    flierprops=dict(marker='o', markerfacecolor='gray', markersize=4, linestyle='none'))
+                                    medianprops=dict(color="black", linewidth=1.2),
+                                    flierprops=dict(marker='o', markerfacecolor='gray', markersize=3, linestyle='none'))
                 except TypeError:
-                    # 구버전 Matplotlib 문법 백업 (labels)
                     bp = ax.boxplot(box_data, labels=active_labels, patch_artist=True, showmeans=False,
-                                    medianprops=dict(color="black", linewidth=1.5),
-                                    flierprops=dict(marker='o', markerfacecolor='gray', markersize=4, linestyle='none'))
+                                    medianprops=dict(color="black", linewidth=1.2),
+                                    flierprops=dict(marker='o', markerfacecolor='gray', markersize=3, linestyle='none'))
                 
                 for patch, color in zip(bp['boxes'], box_colors):
                     patch.set_facecolor(color)
                     patch.set_alpha(0.7)
             
-            ax.set_title(f"{param} [{unit_str}] - Box Plot", fontdict={'fontsize': 10, 'weight': 'bold'})
-            ax.set_xlabel("Read-out", fontsize=8)
-            ax.set_ylabel(param, fontsize=8)
-            ax.tick_params(axis='x', labelsize=8, rotation=15)
+            ax.set_title(f"{param} [{unit_str}]", fontdict={'fontsize': 10, 'weight': 'bold'})
+            ax.tick_params(axis='x', labelsize=8, rotation=20)
             ax.tick_params(axis='y', labelsize=8)
             ax.grid(True, linestyle=":", alpha=0.4)
+            fig.tight_layout()
             
-            param_block = tk.Frame(self.scrollable_frame, bd=1, relief=tk.GROOVE, pady=10, padx=10, bg="white")
-            param_block.pack(fill=tk.X, padx=15, pady=10)
-            
-            canvas_box = FigureCanvasTkAgg(fig, master=param_block)
+            # 그래프 배치
+            canvas_box = FigureCanvasTkAgg(fig, master=box_block)
             canvas_box_widget = canvas_box.get_tk_widget()
-            canvas_box_widget.pack(side=tk.LEFT, padx=10)
+            canvas_box_widget.pack(side=tk.TOP, fill=tk.X)
             canvas_box.draw()
             
-            stat_frame = tk.Frame(param_block, bg="#fafafa", bd=1, relief=tk.SUNKEN, padx=10, pady=10)
-            stat_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=10)
+            # 그래프 바로 아래에 통계값 박스 배치
+            stat_frame = tk.Frame(box_block, bg="#fafafa", bd=1, relief=tk.SUNKEN, padx=8, pady=8)
+            stat_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True, pady=5)
             
-            tk.Label(stat_frame, text="📊 하단 통계 정보 (Min, max, AVG, s/s, STDdev)", font=("Arial", 10, "bold"), bg="#fafafa").pack(anchor="w", pady=5)
             for st_txt in stat_strings:
-                tk.Label(stat_frame, text=st_txt, font=("Consolas", 9), bg="#fafafa", fg="#333", justify=tk.LEFT, anchor="w").pack(fill=tk.X, pady=2)
+                tk.Label(stat_frame, text=st_txt, font=("Consolas", 8), bg="#fafafa", fg="#333", justify=tk.LEFT, anchor="w").pack(fill=tk.X, pady=3)
+
+        # 모든 열이 균등한 가로 사이즈 비율을 갖도록 크기 가중치 보정
+        for c in range(4):
+            grid_container.column_configure(c, weight=1)
 
         self.update_undo_button_state()
-        
         if first_trigger:
             self.after(200, lambda: messagebox.showinfo("안내", "분석하고자 하는 parameter를 선택하세요"))
 
@@ -425,7 +401,6 @@ class DataAnalysisApp(tk.Tk):
 
     def trigger_undo(self):
         if not self.undo_history: return
-        
         last_action = self.undo_history.pop()
         action_type = last_action[0]
         
@@ -433,11 +408,9 @@ class DataAnalysisApp(tk.Tk):
             param_name, filename, unit_id = last_action[1], last_action[2], last_action[3]
             key = (param_name, filename, unit_id)
             if key in self.custom_point_colors: del self.custom_point_colors[key]
-                
         elif action_type == 'DELETE_POINT':
             param_name, filename, unit_id, real_idx, raw_val = last_action[1], last_action[2], last_action[3], last_action[4], last_action[5]
             self.raw_files_data[filename]['params'][param_name]['values'][real_idx] = raw_val
-            
         elif action_type == 'DELETE_UNIT':
             param_name = last_action[1]
             saved_states = last_action[5]
@@ -453,53 +426,82 @@ class DataAnalysisApp(tk.Tk):
         
         try:
             from matplotlib.backends.backend_pdf import PdfPages
+            colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b']
+            
             with PdfPages(save_path) as pdf:
-                for param in self.selected_parameters:
-                    fig1, ax1 = plt.subplots(figsize=(11, 3))
-                    unit_str = ""
-                    for fn in self.sorted_filenames:
-                        if param in self.raw_files_data[fn]['params']:
-                            unit_str = self.raw_files_data[fn]['params'][param]['unit']
-                            break
+                # Part 1: Line Charts 모아찍기 (한 페이지당 가로 모드 최대 4개)
+                for chunk_idx in range(0, len(self.selected_parameters), 4):
+                    fig = plt.figure(figsize=(11, 8.5))
+                    plt.suptitle("Reliability Trend Report - Line Charts", fontsize=14, weight='bold', y=0.96)
+                    
+                    chunk_params = self.selected_parameters[chunk_idx:chunk_idx+4]
+                    for sub_idx, param in enumerate(chunk_params):
+                        ax = fig.add_subplot(4, 1, sub_idx + 1)
+                        
+                        unit_str = ""
+                        for fn in self.sorted_filenames:
+                            if param in self.raw_files_data[fn]['params']:
+                                unit_str = self.raw_files_data[fn]['params'][param]['unit']
+                                break
+                                
+                        for f_idx, filename in enumerate(self.sorted_filenames):
+                            if param not in self.raw_files_data[filename]['params']: continue
+                            p_info = self.raw_files_data[filename]['params'][param]
+                            plot_x = [str(ux) for ux, uy in zip(p_info['units_map'], p_info['values']) if uy is not None and not np.isnan(uy)]
+                            plot_y = [uy for uy in p_info['values'] if uy is not None and not np.isnan(uy)]
+                            if plot_x:
+                                ax.plot(plot_x, plot_y, '-o', label=filename, color=colors[f_idx % len(colors)], markersize=2.5, linewidth=1)
+                        
+                        ax.set_title(f"{param} [{unit_str}]", fontsize=9, pad=3)
+                        ax.grid(True, linestyle=":", alpha=0.5)
+                        ax.tick_params(labelsize=7)
+                        if sub_idx == 0:
+                            ax.legend(loc="upper right", fontsize=6, ncol=3)
                             
-                    colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b']
-                    for f_idx, filename in enumerate(self.sorted_filenames):
-                        if param not in self.raw_files_data[filename]['params']: continue
-                        p_info = self.raw_files_data[filename]['params'][param]
-                        plot_x = [str(ux) for ux, uy in zip(p_info['units_map'], p_info['values']) if uy is not None and not np.isnan(uy)]
-                        plot_y = [uy for uy in p_info['values'] if uy is not None and not np.isnan(uy)]
-                        if plot_x:
-                            ax1.plot(plot_x, plot_y, '-o', label=filename, color=colors[f_idx % len(colors)], markersize=3)
+                    fig.tight_layout(rect=[0, 0, 1, 0.93])
+                    pdf.savefig(fig)
+                    plt.close(fig)
+                
+                # Part 2: Box Plots 모아찍기 (한 페이지당 가로 모드 최대 4개)
+                for chunk_idx in range(0, len(self.selected_parameters), 4):
+                    fig = plt.figure(figsize=(11, 8.5))
+                    plt.suptitle("Reliability Distribution Report - Box Plots", fontsize=14, weight='bold', y=0.96)
                     
-                    ax1.set_title(f"{param} [{unit_str}] - Trend")
-                    ax1.grid(True, linestyle=":")
-                    ax1.legend(loc="upper right", fontsize=7)
-                    pdf.savefig(fig1)
-                    plt.close(fig1)
+                    chunk_params = self.selected_parameters[chunk_idx:chunk_idx+4]
+                    for sub_idx, param in enumerate(chunk_params):
+                        ax = fig.add_subplot(1, 4, sub_idx + 1)
+                        
+                        box_data, active_labels = [], []
+                        for filename in self.sorted_filenames:
+                            if param in self.raw_files_data[filename]['params']:
+                                vals = [v for v in self.raw_files_data[filename]['params'][param]['values'] if v is not None and not np.isnan(v)]
+                                box_data.append(vals)
+                                active_labels.append(filename)
+                        
+                        unit_str = ""
+                        for fn in self.sorted_filenames:
+                            if param in self.raw_files_data[fn]['params']:
+                                unit_str = self.raw_files_data[fn]['params'][param]['unit']
+                                break
+                                
+                        if box_data and any(len(b) > 0 for b in box_data):
+                            try:
+                                ax.boxplot(box_data, tick_labels=active_labels)
+                            except TypeError:
+                                ax.boxplot(box_data, labels=active_labels)
+                                
+                        ax.set_title(f"{param}\n[{unit_str}]", fontsize=9)
+                        ax.grid(True, linestyle=":", alpha=0.4)
+                        ax.tick_params(axis='x', labelsize=7, rotation=30)
+                        ax.tick_params(axis='y', labelsize=7)
+                        
+                    fig.tight_layout(rect=[0, 0, 1, 0.92])
+                    pdf.savefig(fig)
+                    plt.close(fig)
                     
-                    fig2, ax2 = plt.subplots(figsize=(6, 5))
-                    box_data = []
-                    active_labels = []
-                    for filename in self.sorted_filenames:
-                        if param in self.raw_files_data[filename]['params']:
-                            vals = [v for v in self.raw_files_data[filename]['params'][param]['values'] if v is not None and not np.isnan(v)]
-                            box_data.append(vals)
-                            active_labels.append(filename)
-                            
-                    if box_data and any(len(b) > 0 for b in box_data):
-                        try:
-                            ax2.boxplot(box_data, tick_labels=active_labels)
-                        except TypeError:
-                            ax2.boxplot(box_data, labels=active_labels)
-                    ax2.set_title(f"{param} [{unit_str}] - Distribution")
-                    ax2.grid(True, linestyle=":")
-                    plt.xticks(rotation=15)
-                    pdf.savefig(fig2)
-                    plt.close(fig2)
-                    
-            messagebox.showinfo("PDF 내보내기", f"성공적으로 PDF 리포트가 생성되었습니다:\n{save_path}")
+            messagebox.showinfo("PDF 내보내기", f"가로 보기 양식 리포트가 생성되었습니다:\n{save_path}")
         except Exception as e:
-            messagebox.showerror("PDF 에러", f"PDF 생성 중 예외 발생: {str(e)}")
+            messagebox.showerror("PDF 에러", f"PDF 생성 중 에러 발생: {str(e)}")
 
 if __name__ == "__main__":
     app = DataAnalysisApp()
