@@ -23,7 +23,8 @@ class DataAnalysisApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Reliability Data Analyzer (정밀 데이터 분석 프로그램)")
-        self.geometry("1400(x)950")
+        # [수정 완료]: (x) 부분을 올바른 규격인 x로 변경했습니다.
+        self.geometry("1400x950")
         
         # 데이터 관리 변수
         self.raw_files_data = {}  
@@ -121,7 +122,7 @@ class DataAnalysisApp(tk.Tk):
                     p_name = col[0]
                     p_unit = col[1] if not pd.isna(col[1]) else ""
                     
-                    # [필터링 구현]: 파라미터 명에 cont 또는 contact가 포함되면 수집 단계에서 제외
+                    # 파라미터 필터링 (cont, contact 제외)
                     if "cont" in p_name.lower() or "contact" in p_name.lower():
                         continue
                         
@@ -145,7 +146,6 @@ class DataAnalysisApp(tk.Tk):
             
             popup_prep.destroy()
             
-            # 실제 선택 화면 UI를 먼저 렌더링하도록 흐름 교정
             self.init_analysis_menu()
             
         except Exception as e:
@@ -156,7 +156,6 @@ class DataAnalysisApp(tk.Tk):
         for widget in self.winfo_children():
             widget.destroy()
             
-        # 상단 메뉴 프레임
         top_frame = tk.Frame(self, bg="#f4f4f4", pady=10, padx=10)
         top_frame.pack(fill=tk.X, side=tk.TOP)
         
@@ -174,14 +173,12 @@ class DataAnalysisApp(tk.Tk):
         self.btn_undo = tk.Button(top_frame, text="↩️ 되돌리기 (Undo)", font=("Arial", 10), state=tk.DISABLED, command=self.trigger_undo)
         self.btn_undo.pack(side=tk.LEFT, padx=5)
         
-        # 하단 저장 프레임
         bottom_frame = tk.Frame(self, bg="#e6e6e6", pady=8, padx=10)
         bottom_frame.pack(fill=tk.X, side=tk.BOTTOM)
         
         btn_pdf = tk.Button(bottom_frame, text="결과물 PDF 파일로 저장", font=("Arial", 11, "bold"), bg="#d24726", fg="white", padx=15, command=self.export_plots_to_pdf)
         btn_pdf.pack(side=tk.RIGHT, padx=10)
         
-        # 스크롤 가능한 메인 작업 공간
         container = tk.Frame(self)
         container.pack(fill=tk.BOTH, expand=True)
         
@@ -199,7 +196,6 @@ class DataAnalysisApp(tk.Tk):
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
         
-        # 첫 번째 렌더링 수행
         self.render_analysis_graphs(first_trigger=True)
 
     def update_undo_button_state(self):
@@ -221,10 +217,8 @@ class DataAnalysisApp(tk.Tk):
         if not self.selected_parameters:
             return
             
-        # 색상 맵핑
         colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf']
         
-        # A단계: 점선 그래프 세트 순차 나열
         st_label1 = tk.Label(self.scrollable_frame, text="■ 시간별 데이터 변화 추이 (Line Charts)", font=("Arial", 14, "bold"), fg="#111", pady=10)
         st_label1.pack(anchor="w", padx=10)
         
@@ -277,7 +271,6 @@ class DataAnalysisApp(tk.Tk):
             canvas_widget.pack(fill=tk.X, padx=15, pady=5)
             canvas.mpl_connect('pick_event', lambda event, p=param: self.on_point_picked(event, p))
             
-            # Y축 범위 컨트롤러 조절 패널
             ctrl_f = tk.Frame(self.scrollable_frame, bg="#fafafa")
             ctrl_f.pack(fill=tk.X, padx=20, pady=2)
             tk.Label(ctrl_f, text="Y축 최소:", font=("Arial", 8), bg="#fafafa").pack(side=tk.LEFT)
@@ -295,12 +288,11 @@ class DataAnalysisApp(tk.Tk):
                 except ValueError: pass
             tk.Button(ctrl_f, text="축 조정", font=("Arial", 8), command=apply_axis).pack(side=tk.LEFT, padx=5)
 
-        # B단계: 박스 플롯 세트 정렬 나열 (버그 전면 수정)
         st_label2 = tk.Label(self.scrollable_frame, text="■ Read-out별 데이터 산포 비교 (Box Plots & Statistics)", font=("Arial", 14, "bold"), fg="#111", pady=15)
         st_label2.pack(anchor="w", padx=10)
         
         for param in self.selected_parameters:
-            fig, ax = plt.subplots(figsize=(4.0, 4.2)) # 컴포넌트 크기 가독성 최적화 증가
+            fig, ax = plt.subplots(figsize=(4.0, 4.2))
             
             box_data = []
             active_labels = []
@@ -349,7 +341,6 @@ class DataAnalysisApp(tk.Tk):
             ax.tick_params(axis='y', labelsize=8)
             ax.grid(True, linestyle=":", alpha=0.4)
             
-            # 박스 플롯 레이아웃 박스 구성
             param_block = tk.Frame(self.scrollable_frame, bd=1, relief=tk.GROOVE, pady=10, padx=10, bg="white")
             param_block.pack(fill=tk.X, padx=15, pady=10)
             
@@ -358,7 +349,6 @@ class DataAnalysisApp(tk.Tk):
             canvas_box_widget.pack(side=tk.LEFT, padx=10)
             canvas_box.draw()
             
-            # 우측 통계 데이터 영역 배치
             stat_frame = tk.Frame(param_block, bg="#fafafa", bd=1, relief=tk.SUNKEN, padx=10, pady=10)
             stat_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=10)
             
@@ -368,7 +358,6 @@ class DataAnalysisApp(tk.Tk):
 
         self.update_undo_button_state()
         
-        # 실제 메인화면이 완전히 그려진 뒤 팝업이 뜨도록 순서 교정 실행
         if first_trigger:
             self.after(200, lambda: messagebox.showinfo("안내", "분석하고자 하는 parameter를 선택하세요"))
 
