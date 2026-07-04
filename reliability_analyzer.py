@@ -7,11 +7,10 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import matplotlib
 matplotlib.use("TkAgg")
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import matplotlib.pyplot as plt
-from matplotlib.patches import PathPatch
 
-# Hangul Font Settings for Matplotlib
+# 한글 깨짐 방지를 위한 윈도우 기본 폰트 설정
 import matplotlib.font_manager as fm
 try:
     font_location = "C:/Windows/Fonts/malgun.ttf"
@@ -24,26 +23,19 @@ class DataAnalysisApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Reliability Data Analyzer (정밀 데이터 분석 프로그램)")
-        self.geometry("1400x900")
+        self.geometry("1400(x)950")
         
-        # Data Management Variables
-        self.raw_files_data = {}  # filename -> {'df': df, 'units': [...], 'params': {param_name: (values, unit_str)}}
+        # 데이터 관리 변수
+        self.raw_files_data = {}  
         self.sorted_filenames = []
         self.parameter_list = []
         self.selected_parameters = []
-        
-        # State History for Undo Functionality (지우기 되돌리기용 저장소)
-        # Stores tuples of (action_type, parameter_name, filename, unit_id, index, raw_value, full_row_deleted_flag)
         self.undo_history = []
-        
-        # Custom point colors: dictionary mapping (param, filename, unit_id) -> color_str
         self.custom_point_colors = {}
         
-        # UI Flow Step Control
         self.init_upload_menu()
         
     def init_upload_menu(self):
-        # Clear existing widgets
         for widget in self.winfo_children():
             widget.destroy()
             
@@ -74,12 +66,11 @@ class DataAnalysisApp(tk.Tk):
         if not files:
             return
             
-        # 8-6. 파일 개수 제한 조건 체크 (20개 이하)
         if len(files) > 20:
             messagebox.showerror("오류", "파일은 20개 이하이어야 합니다.")
             return
             
-        # Show '분석 준비 중' Popup immediately
+        # '분석 준 비 중' 팝업 표시
         popup_prep = tk.Toplevel(self)
         popup_prep.title("알림")
         popup_prep.geometry("300x120")
@@ -91,9 +82,7 @@ class DataAnalysisApp(tk.Tk):
         self.update()
         
         try:
-            # Sort files by time / read-out order
             sorted_paths = sorted(files, key=lambda x: self.extract_sort_key(os.path.basename(x)))
-            
             temp_files_data = {}
             all_detected_params = set()
             
@@ -103,34 +92,27 @@ class DataAnalysisApp(tk.Tk):
             for path in sorted_paths:
                 fname = os.path.basename(path)
                 
-                # Load with multi-row headers (Row 1: Parameter name, Row 2: Unit)
                 if fname.endswith('.csv'):
                     df = pd.read_csv(path, header=[0, 1])
                 else:
                     df = pd.read_excel(path, header=[0, 1])
                 
-                # Check dimensions
                 num_rows = len(df)
-                num_cols = len(df.columns) - 1 # excluding first column (Unit #)
+                num_cols = len(df.columns) - 1
                 
-                if num_rows > max_units_found:
-                    max_units_found = num_rows
-                if num_cols > max_params_found:
-                    max_params_found = num_cols
+                if num_rows > max_units_found: max_units_found = num_rows
+                if num_cols > max_params_found: max_params_found = num_cols
                     
-                # 8-4. 시료수 500개 조건 검증
                 if num_rows > 500:
                     popup_prep.destroy()
                     messagebox.showerror("오류", "시료수가 너무 많습니다. 500개 이하만 가능합니다.")
                     return
                     
-                # 8-5. 파라미터 수 100개 조건 검증
                 if num_cols > 100:
                     popup_prep.destroy()
                     messagebox.showerror("오류", "parameter가 너무 많습니다. 100개 이하이어야 합니다.")
                     return
                 
-                # Parse structured rows
                 unit_col_name = df.columns[0]
                 units_list = df[unit_col_name].astype(str).tolist()
                 
@@ -139,7 +121,10 @@ class DataAnalysisApp(tk.Tk):
                     p_name = col[0]
                     p_unit = col[1] if not pd.isna(col[1]) else ""
                     
-                    # Store values preserving index mapping
+                    # [필터링 구현]: 파라미터 명에 cont 또는 contact가 포함되면 수집 단계에서 제외
+                    if "cont" in p_name.lower() or "contact" in p_name.lower():
+                        continue
+                        
                     vals = pd.to_numeric(df[col], errors='coerce').tolist()
                     param_dict[p_name] = {
                         'unit': p_unit,
@@ -154,16 +139,13 @@ class DataAnalysisApp(tk.Tk):
                     'params': param_dict
                 }
             
-            # Save to global state if all validated
             self.raw_files_data = temp_files_data
             self.sorted_filenames = [os.path.basename(p) for p in sorted_paths]
             self.parameter_list = sorted(list(all_detected_params))
             
-            # Close preparation popup and transition with confirmation
             popup_prep.destroy()
             
-            # 7번 조건: '분석하고자 하는 parameter를 선택하세요' 팝업 후 확인 시 메뉴 이동
-            messagebox.showinfo("안내", "분석하고자 하는 parameter를 선택하세요")
+            # 실제 선택 화면 UI를 먼저 렌더링하도록 흐름 교정
             self.init_analysis_menu()
             
         except Exception as e:
@@ -174,13 +156,12 @@ class DataAnalysisApp(tk.Tk):
         for widget in self.winfo_children():
             widget.destroy()
             
-        # Top Config Frame
+        # 상단 메뉴 프레임
         top_frame = tk.Frame(self, bg="#f4f4f4", pady=10, padx=10)
         top_frame.pack(fill=tk.X, side=tk.TOP)
         
         tk.Label(top_frame, text="Parameter 선택 (Drop-down):", font=("Arial", 11, "bold"), bg="#f4f4f4").pack(side=tk.LEFT, padx=5)
         
-        # Dropdown Combobox with "전체 선택" option
         self.combo_options = ["전체 선택"] + self.parameter_list
         self.param_var = tk.StringVar()
         self.combo_param = ttk.Combobox(top_frame, textvariable=self.param_var, values=self.combo_options, width=30, state="readonly")
@@ -193,14 +174,14 @@ class DataAnalysisApp(tk.Tk):
         self.btn_undo = tk.Button(top_frame, text="↩️ 되돌리기 (Undo)", font=("Arial", 10), state=tk.DISABLED, command=self.trigger_undo)
         self.btn_undo.pack(side=tk.LEFT, padx=5)
         
-        # Bottom Export Layout
+        # 하단 저장 프레임
         bottom_frame = tk.Frame(self, bg="#e6e6e6", pady=8, padx=10)
         bottom_frame.pack(fill=tk.X, side=tk.BOTTOM)
         
         btn_pdf = tk.Button(bottom_frame, text="결과물 PDF 파일로 저장", font=("Arial", 11, "bold"), bg="#d24726", fg="white", padx=15, command=self.export_plots_to_pdf)
         btn_pdf.pack(side=tk.RIGHT, padx=10)
         
-        # Main Scrollable Workspace for Graphs
+        # 스크롤 가능한 메인 작업 공간
         container = tk.Frame(self)
         container.pack(fill=tk.BOTH, expand=True)
         
@@ -218,8 +199,8 @@ class DataAnalysisApp(tk.Tk):
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
         
-        # Initial Render
-        self.render_analysis_graphs()
+        # 첫 번째 렌더링 수행
+        self.render_analysis_graphs(first_trigger=True)
 
     def update_undo_button_state(self):
         if self.undo_history:
@@ -227,8 +208,7 @@ class DataAnalysisApp(tk.Tk):
         else:
             self.btn_undo.config(state=tk.DISABLED)
 
-    def render_analysis_graphs(self):
-        # Clear the graph frame contents
+    def render_analysis_graphs(self, first_trigger=False):
         for widget in self.scrollable_frame.winfo_children():
             widget.destroy()
             
@@ -241,24 +221,21 @@ class DataAnalysisApp(tk.Tk):
         if not self.selected_parameters:
             return
             
-        # 8-3. 전체 선택 배치 순서 규칙 준수: 점선 그래프 세트 나열 후 박스 플롯 세트 나열
-        # Step A: Trend Line Charts Sequence
+        # 색상 맵핑
+        colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf']
+        
+        # A단계: 점선 그래프 세트 순차 나열
         st_label1 = tk.Label(self.scrollable_frame, text="■ 시간별 데이터 변화 추이 (Line Charts)", font=("Arial", 14, "bold"), fg="#111", pady=10)
         st_label1.pack(anchor="w", padx=10)
         
-        # Color mapping for files
-        colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf']
-        
         for param in self.selected_parameters:
-            # Find unit string from any file that contains this parameter
             unit_str = ""
             for fn in self.sorted_filenames:
                 if param in self.raw_files_data[fn]['params']:
                     unit_str = self.raw_files_data[fn]['params'][param]['unit']
                     break
             
-            # Width * Height = 33 * 4 cm ratio roughly maps to 13.0 * 1.57 inches
-            fig, ax = plt.subplots(figsize=(13.0, 1.6))
+            fig, ax = plt.subplots(figsize=(13.0, 1.8))
             
             for f_idx, filename in enumerate(self.sorted_filenames):
                 if param not in self.raw_files_data[filename]['params']:
@@ -268,19 +245,16 @@ class DataAnalysisApp(tk.Tk):
                 x_units = p_info['units_map']
                 y_vals = p_info['values']
                 
-                # Filter out values where whole unit or point is deleted (None or NaN)
                 plot_x = []
                 plot_y = []
                 plot_colors = []
                 
                 for idx, (ux, uy) in enumerate(zip(x_units, y_vals)):
                     if uy is None or np.isnan(uy):
-                        # 8-7. 데이터가 누락되거나 지워진 경우 빈칸으로 두고 연결 끊어짐 처리
                         continue
                     plot_x.append(str(ux))
                     plot_y.append(uy)
                     
-                    # Apply custom dot color modifications if present
                     c_key = (param, filename, str(ux))
                     if c_key in self.custom_point_colors:
                         plot_colors.append(self.custom_point_colors[c_key])
@@ -288,10 +262,8 @@ class DataAnalysisApp(tk.Tk):
                         plot_colors.append(colors[f_idx % len(colors)])
             
                 if plot_x:
-                    # Draw Line
                     ax.plot(plot_x, plot_y, linestyle='-', color=colors[f_idx % len(colors)], alpha=0.6, zorder=1)
-                    # Draw Scatter with individual customized colors
-                    scatter = ax.scatter(plot_x, plot_y, color=plot_colors, s=25, label=filename, zorder=2, picker=True)
+                    ax.scatter(plot_x, plot_y, color=plot_colors, s=25, label=filename, zorder=2, picker=True)
             
             ax.set_title(f"{param} [{unit_str}]", fontdict={'fontsize': 11, 'weight': 'bold'})
             ax.set_xlabel("Unit #", fontsize=9)
@@ -300,15 +272,12 @@ class DataAnalysisApp(tk.Tk):
             ax.legend(loc="upper right", fontsize=8)
             ax.grid(True, linestyle=":", alpha=0.5)
             
-            # Embed matplotlib widget
             canvas = FigureCanvasTkAgg(fig, master=self.scrollable_frame)
             canvas_widget = canvas.get_tk_widget()
             canvas_widget.pack(fill=tk.X, padx=15, pady=5)
-            
-            # Interactive point clicking event setup for color modification/deletion
             canvas.mpl_connect('pick_event', lambda event, p=param: self.on_point_picked(event, p))
             
-            # Add customized Y-axis scale override controllers right under each plot
+            # Y축 범위 컨트롤러 조절 패널
             ctrl_f = tk.Frame(self.scrollable_frame, bg="#fafafa")
             ctrl_f.pack(fill=tk.X, padx=20, pady=2)
             tk.Label(ctrl_f, text="Y축 최소:", font=("Arial", 8), bg="#fafafa").pack(side=tk.LEFT)
@@ -323,17 +292,15 @@ class DataAnalysisApp(tk.Tk):
                     if emin.get(): a.set_ylim(bottom=float(emin.get()))
                     if emax.get(): a.set_ylim(top=float(emax.get()))
                     c.draw()
-                except ValueError:
-                    pass
+                except ValueError: pass
             tk.Button(ctrl_f, text="축 조정", font=("Arial", 8), command=apply_axis).pack(side=tk.LEFT, padx=5)
 
-        # Step B: Box Plots Sequence
+        # B단계: 박스 플롯 세트 정렬 나열 (버그 전면 수정)
         st_label2 = tk.Label(self.scrollable_frame, text="■ Read-out별 데이터 산포 비교 (Box Plots & Statistics)", font=("Arial", 14, "bold"), fg="#111", pady=15)
         st_label2.pack(anchor="w", padx=10)
         
         for param in self.selected_parameters:
-            # Width * Height = 7.5 * 9 cm ratio matches roughly 3.0 * 3.54 inches
-            fig, ax = plt.subplots(figsize=(3.4, 3.6))
+            fig, ax = plt.subplots(figsize=(4.0, 4.2)) # 컴포넌트 크기 가독성 최적화 증가
             
             box_data = []
             active_labels = []
@@ -344,23 +311,21 @@ class DataAnalysisApp(tk.Tk):
                 if param not in self.raw_files_data[filename]['params']:
                     continue
                 p_info = self.raw_files_data[filename]['params'][param]
-                # Filter active values
                 vals = [v for v in p_info['values'] if v is not None and not np.isnan(v)]
                 
                 box_data.append(vals)
                 active_labels.append(filename)
                 box_colors.append(colors[f_idx % len(colors)])
                 
-                # Calculate required stats: Min, max, AVG, s/s, STDdev
                 if vals:
                     p_min = np.min(vals)
                     p_max = np.max(vals)
                     p_avg = np.mean(vals)
                     p_ss = len(vals)
                     p_std = np.std(vals)
-                    stat_strings.append(f"{filename}\nMin: {p_min:.2f}  Max: {p_max:.2f}\nAVG: {p_avg:.2f}  s/s: {p_ss}  STDdev: {p_std:.2f}")
+                    stat_strings.append(f"[{filename}] Min: {p_min:.2f} | Max: {p_max:.2f} | AVG: {p_avg:.2f} | s/s: {p_ss} | STDdev: {p_std:.2f}")
                 else:
-                    stat_strings.append(f"{filename}\nNo Data Available")
+                    stat_strings.append(f"[{filename}] No Data Available")
             
             unit_str = ""
             for fn in self.sorted_filenames:
@@ -373,57 +338,53 @@ class DataAnalysisApp(tk.Tk):
                                 medianprops=dict(color="black", linewidth=1.5),
                                 flierprops=dict(marker='o', markerfacecolor='gray', markersize=4, linestyle='none'))
                 
-                # Exact matching colors configuration
                 for patch, color in zip(bp['boxes'], box_colors):
                     patch.set_facecolor(color)
                     patch.set_alpha(0.7)
             
-            ax.set_title(f"{param} [{unit_str}]", fontdict={'fontsize': 10, 'weight': 'bold'})
+            ax.set_title(f"{param} [{unit_str}] - Box Plot", fontdict={'fontsize': 10, 'weight': 'bold'})
             ax.set_xlabel("Read-out", fontsize=8)
             ax.set_ylabel(param, fontsize=8)
-            ax.tick_params(axis='x', labelsize=7, rotation=15)
+            ax.tick_params(axis='x', labelsize=8, rotation=15)
             ax.tick_params(axis='y', labelsize=8)
             ax.grid(True, linestyle=":", alpha=0.4)
             
-            # Render layout block
-            param_block = tk.Frame(self.scrollable_frame, bd=1, relief=tk.GROOVE, pady=5, padx=5, bg="white")
+            # 박스 플롯 레이아웃 박스 구성
+            param_block = tk.Frame(self.scrollable_frame, bd=1, relief=tk.GROOVE, pady=10, padx=10, bg="white")
             param_block.pack(fill=tk.X, padx=15, pady=10)
             
-            canvas = FigureCanvasTkAgg(fig, master=param_block)
-            canvas_widget = canvas.get_tk_widget()
-            canvas_widget.pack(side=tk.LEFT, padx=5)
+            canvas_box = FigureCanvasTkAgg(fig, master=param_block)
+            canvas_box_widget = canvas_box.get_tk_widget()
+            canvas_box_widget.pack(side=tk.LEFT, padx=10)
+            canvas_box.draw()
             
-            # Display Statistics beneath/outside the Boxplot container perfectly aligned
-            stat_frame = tk.Frame(param_block, bg="#fafafa", bd=1, relief=tk.SUNKEN)
+            # 우측 통계 데이터 영역 배치
+            stat_frame = tk.Frame(param_block, bg="#fafafa", bd=1, relief=tk.SUNKEN, padx=10, pady=10)
             stat_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=10)
             
-            tk.Label(stat_frame, text="[통계 정보 표기역 - Min, max, AVG, s/s, STDdev]", font=("Arial", 9, "bold"), bg="#fafafa").pack(anchor="w", padx=5, pady=2)
+            tk.Label(stat_frame, text="📊 하단 통계 정보 (Min, max, AVG, s/s, STDdev)", font=("Arial", 10, "bold"), bg="#fafafa").pack(anchor="w", pady=5)
             for st_txt in stat_strings:
-                tk.Label(stat_frame, text=st_txt, font=("Consolas", 8), bg="#fafafa", justify=tk.LEFT, anchor="w").pack(fill=tk.X, padx=8, pady=1)
+                tk.Label(stat_frame, text=st_txt, font=("Consolas", 9), bg="#fafafa", fg="#333", justify=tk.LEFT, anchor="w").pack(fill=tk.X, pady=2)
 
-        # 9번 조건: 'data 분석이 완료 되었습니다' 최종 완료 알림 알럿창 팝업 실행
-        messagebox.showinfo("완료", "data 분석이 완료 되었습니다")
         self.update_undo_button_state()
+        
+        # 실제 메인화면이 완전히 그려진 뒤 팝업이 뜨도록 순서 교정 실행
+        if first_trigger:
+            self.after(200, lambda: messagebox.showinfo("안내", "분석하고자 하는 parameter를 선택하세요"))
 
     def on_point_picked(self, event, param_name):
-        # Identify point context
         line = event.artist
         filename = line.get_label()
         ind = event.ind[0]
         
-        # Extract corresponding unit and value
         p_info = self.raw_files_data[filename]['params'][param_name]
-        
-        # Re-map index with respect to filtered plotting points
         active_indices = [i for i, v in enumerate(p_info['values']) if v is not None and not np.isnan(v)]
-        if ind >= len(active_indices):
-            return
+        if ind >= len(active_indices): return
         real_idx = active_indices[ind]
         
         unit_id = str(p_info['units_map'][real_idx])
         raw_val = p_info['values'][real_idx]
         
-        # Action selector popup menu creation
         popup_act = tk.Toplevel(self)
         popup_act.title("데이터 포인트 제어")
         popup_act.geometry("380x180")
@@ -437,7 +398,6 @@ class DataAnalysisApp(tk.Tk):
         btn_frame.pack(pady=5)
         
         def change_color():
-            # Simply cycle or highlight selected node color
             self.custom_point_colors[(param_name, filename, unit_id)] = "magenta"
             self.undo_history.append(('COLOR', param_name, filename, unit_id, real_idx, raw_val, False))
             popup_act.destroy()
@@ -450,8 +410,6 @@ class DataAnalysisApp(tk.Tk):
             self.render_analysis_graphs()
             
         def delete_unit_axis():
-            # 8-1 조건: x축에서 해당 unit의 번호도 함께 완전 삭제 처리할지 선택구현
-            # Removes this Unit index point systematically across all readouts for this specific parameter
             saved_states = []
             for fn in self.sorted_filenames:
                 if param_name in self.raw_files_data[fn]['params']:
@@ -471,8 +429,7 @@ class DataAnalysisApp(tk.Tk):
         tk.Button(btn_frame, text="❌ X축 Unit 번호 및 전체 삭제", bg="#2d3436", fg="white", command=delete_unit_axis, width=46).grid(row=1, column=0, columnspan=2, padx=5, pady=5)
 
     def trigger_undo(self):
-        if not self.undo_history:
-            return
+        if not self.undo_history: return
         
         last_action = self.undo_history.pop()
         action_type = last_action[0]
@@ -480,8 +437,7 @@ class DataAnalysisApp(tk.Tk):
         if action_type == 'COLOR':
             param_name, filename, unit_id = last_action[1], last_action[2], last_action[3]
             key = (param_name, filename, unit_id)
-            if key in self.custom_point_colors:
-                del self.custom_point_colors[key]
+            if key in self.custom_point_colors: del self.custom_point_colors[key]
                 
         elif action_type == 'DELETE_POINT':
             param_name, filename, unit_id, real_idx, raw_val = last_action[1], last_action[2], last_action[3], last_action[4], last_action[5]
@@ -489,7 +445,7 @@ class DataAnalysisApp(tk.Tk):
             
         elif action_type == 'DELETE_UNIT':
             param_name = last_action[1]
-            saved_states = last_action[5]  # holds list of (fn, u_idx, old_v)
+            saved_states = last_action[5]
             for fn, u_idx, old_v in saved_states:
                 self.raw_files_data[fn]['params'][param_name]['values'][u_idx] = old_v
                 
@@ -497,18 +453,13 @@ class DataAnalysisApp(tk.Tk):
         self.render_analysis_graphs()
 
     def export_plots_to_pdf(self):
-        # Exporting full report to workspace PDF file
         save_path = filedialog.asksaveasfilename(defaultextension=".pdf", filetypes=[("PDF Documents", "*.pdf")])
-        if not save_path:
-            return
+        if not save_path: return
         
-        # Save all current figures combined into a multi-page PDF document cleanly
         try:
             from matplotlib.backends.backend_pdf import PdfPages
             with PdfPages(save_path) as pdf:
-                # Re-generate clean figures specifically for PDF export layout standard bounds
                 for param in self.selected_parameters:
-                    # 1. Line Chart
                     fig1, ax1 = plt.subplots(figsize=(11, 3))
                     unit_str = ""
                     for fn in self.sorted_filenames:
@@ -518,8 +469,7 @@ class DataAnalysisApp(tk.Tk):
                             
                     colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b']
                     for f_idx, filename in enumerate(self.sorted_filenames):
-                        if param not in self.raw_files_data[filename]['params']:
-                            continue
+                        if param not in self.raw_files_data[filename]['params']: continue
                         p_info = self.raw_files_data[filename]['params'][param]
                         plot_x = [str(ux) for ux, uy in zip(p_info['units_map'], p_info['values']) if uy is not None and not np.isnan(uy)]
                         plot_y = [uy for uy in p_info['values'] if uy is not None and not np.isnan(uy)]
@@ -532,7 +482,6 @@ class DataAnalysisApp(tk.Tk):
                     pdf.savefig(fig1)
                     plt.close(fig1)
                     
-                    # 2. Boxplot
                     fig2, ax2 = plt.subplots(figsize=(6, 5))
                     box_data = []
                     active_labels = []
