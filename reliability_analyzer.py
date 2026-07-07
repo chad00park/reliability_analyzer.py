@@ -1,7 +1,6 @@
 import os
 import re
 import sys
-import threading
 import numpy as np
 import pandas as pd
 import tkinter as tk
@@ -12,13 +11,11 @@ matplotlib.use("TkAgg")
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import matplotlib.pyplot as plt
 
-# PDF 출력을 위한 라이브러리
 try:
     from matplotlib.backends.backend_pdf import PdfPages
 except ImportError:
     pass
 
-# 한글 깨짐 방지
 import matplotlib.font_manager as fm
 try:
     font_location = "C:/Windows/Fonts/malgun.ttf"
@@ -30,7 +27,7 @@ except:
 class DataAnalysisApp(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("Reliability Data Analyzer v3.7 - [Marker Shift & Pure Color]")
+        self.title("Reliability Data Analyzer v3.8 - [Final Verified]")
         self.geometry("1450x950")
         self.center_window(self, 1450, 950)
         
@@ -40,7 +37,7 @@ class DataAnalysisApp(tk.Tk):
         self.lot_groups = {}
         self.lot_display_names = {}
         
-        # 인터랙티브 제어 상태
+        # 인터랙티브 상태 변수 (색상 변경, 데이터 삭제, 되돌리기 스택)
         self.custom_colors = {}   
         self.deleted_units = {}    
         self.undo_stack = []       
@@ -79,7 +76,7 @@ class DataAnalysisApp(tk.Tk):
                 for line in f:
                     col_count = len(line.split(','))
                     if col_count > max_cols: max_cols = col_count
-            return pd.read_csv(path, header=None, names=range(max_cols), engine='python')
+            return pd.read_csv(path, header=None, names=range(max_cols), engine='python', on_bad_lines='skip')
         else:
             return pd.read_excel(path, header=None)
 
@@ -120,7 +117,6 @@ class DataAnalysisApp(tk.Tk):
                 df = self.smart_read_csv_or_excel(path)
                 
                 units = df.iloc[sample_start_row + 1:, 0].dropna().astype(str).tolist()
-                d_start = max(p_idx, u_idx) + 1
                 
                 raw_p = df.iloc[p_idx, 1:].tolist()
                 raw_u = df.iloc[u_idx, 1:].tolist()
@@ -177,6 +173,7 @@ class DataAnalysisApp(tk.Tk):
         ctrl_f.pack(side=tk.RIGHT, padx=10)
         
         tk.Checkbutton(ctrl_f, text="Delta Mode (%)", variable=self.is_delta_mode, bg="#f4f4f4", command=self.start_async_render).pack(side=tk.LEFT, padx=5)
+        # 요구사항 반영: 되돌리기 (Undo) 버튼 배치
         tk.Button(ctrl_f, text="↩ 되돌리기 (Undo)", font=("Arial", 9, "bold"), bg="#7f8c8d", fg="white", command=self.perform_undo).pack(side=tk.LEFT, padx=5)
         tk.Button(ctrl_f, text="📄 가로 포맷 PDF 리포트 저장", font=("Arial", 9, "bold"), bg="#c0392b", fg="white", command=self.export_to_pdf).pack(side=tk.LEFT, padx=5)
 
@@ -245,14 +242,22 @@ class DataAnalysisApp(tk.Tk):
                 f_df = f_df[~f_df.index.duplicated(keep='first')]
                 master_df = master_df.join(f_df, how='outer')
 
+            try:
+                master_df.index = pd.to_numeric(master_df.index)
+            except:
+                pass
             master_df = master_df.sort_index()
+            master_df.index = master_df.index.astype(str)
             all_samples = master_df.index.tolist()
 
+            # Delta Mode 기준 정밀 연산 수식 반영
             if self.is_delta_mode.get() and len(lot_files) > 0:
                 ref_ro = self.raw_files_data[lot_files[0]]['ro']
                 if ref_ro in master_df.columns:
-                    ref_series = master_df[ref_ro]
-                    for col in master_df.columns: master_df[col] = 100 * (master_df[col] - ref_series) / ref_series
+                    ref_series = pd.to_numeric(master_df[ref_ro], errors='coerce')
+                    for col in master_df.columns:
+                        col_series = pd.to_numeric(master_df[col], errors='coerce')
+                        master_df[col] = 100 * (col_series - ref_series) / ref_series
 
             del_set = self.deleted_units.get((target_lot, param), set())
             lines_dataset = []
@@ -272,7 +277,7 @@ class DataAnalysisApp(tk.Tk):
                     punit.append(s_id)
                     
                     c_key = (target_lot, param, s_id)
-                    # 특정 데이터 선택 색상 변경 시 마커를 세모('^')로 변환, 미변경 시 기본 마커('o')
+                    # 요구사항 반영: 색 수정 여부에 따른 세모(^) / 동그라미(o) 마커 쉐이프 제어
                     if c_key in self.custom_colors:
                         pc.append(self.custom_colors[c_key])
                         pm.append('^')
@@ -288,7 +293,6 @@ class DataAnalysisApp(tk.Tk):
                     'param': param, 'title': f"{param} ({display_unit})", 'dataset': lines_dataset, 'all_samples': [s for s in all_samples if s not in del_set]
                 })
 
-        # Box Plots 수집
         for param in self.selected_parameters:
             b_data, a_labels, b_cols, stats = [], [], [], []
             del_set = self.deleted_units.get((target_lot, param), set())
@@ -330,19 +334,19 @@ class DataAnalysisApp(tk.Tk):
                 for c in range(cols): grid_frame.grid_columnconfigure(c, weight=1)
                 
                 for idx, m in enumerate(line_meta):
-                    fig, ax = plt.subplots(figsize=(4.2 if cols==3 else 13.0, 2.4))
+                    fig, ax = plt.subplots(figsize=(4.2 if cols==3 else 13.0, 2.8))
                     for px, py, pc, pm, ro_lbl, b_col in m['dataset']:
-                        ax.plot(px, py, color=b_col, alpha=0.6, zorder=1)
-                        # 개별 마커 속성을 다르게 반영하기 위해 개별 루프 플로팅 적용
+                        ax.plot(px, py, color=b_col, alpha=0.5, zorder=1, label=ro_lbl)
                         for xi, yi, ci, mi in zip(px, py, pc, pm):
-                            sc = ax.scatter(xi, yi, color=ci, marker=mi, s=45 if mi=='^' else 35, zorder=3, picker=True)
-                            sc.__dict__['metadata'] = {'lot': lot_key, 'param': m['param'], 'units': [xi], 'ro': ro_lbl}
+                            # 데이터 수정 연결용 이벤트 피커(picker=True) 활성화 확인
+                            sc = ax.scatter(xi, yi, color=ci, marker=mi, s=55 if mi=='^' else 35, zorder=3, picker=True)
+                            sc.__dict__['metadata'] = {'lot': lot_key, 'param': m['param'], 'unit': xi, 'ro': ro_lbl}
                     
                     ax.set_title(f"[{self.lot_display_names[lot_key]}] {m['title']}", fontsize=9, weight='bold')
+                    ax.set_xticks(range(len(m['all_samples'])))
                     ax.set_xticklabels(m['all_samples'], rotation=15, fontsize=7)
                     ax.grid(True, linestyle=":", alpha=0.5)
                     
-                    # 중복 레전드 방지 핸들러 빌드
                     handles, labels = ax.get_legend_handles_labels()
                     by_label = dict(zip(labels, handles))
                     if by_label: ax.legend(by_label.values(), by_label.keys(), loc="best", fontsize=7, framealpha=0.8)
@@ -350,7 +354,8 @@ class DataAnalysisApp(tk.Tk):
                     plt.tight_layout()
                     cell = tk.Frame(grid_frame, bd=1, relief=tk.RIDGE, bg="white")
                     cell.grid(row=idx//cols, column=idx%cols, padx=4, pady=4, sticky="nsew")
-                    FigureCanvasTkAgg(fig, master=cell).get_tk_widget().pack(fill=tk.BOTH, expand=True)
+                    canvas_obj = FigureCanvasTkAgg(fig, master=cell)
+                    canvas_obj.get_tk_widget().pack(fill=tk.BOTH, expand=True)
                     fig.canvas.mpl_connect('pick_event', self.on_chart_point_clicked)
                     plt.close(fig)
 
@@ -381,17 +386,17 @@ class DataAnalysisApp(tk.Tk):
         scatter = event.artist
         if 'metadata' not in scatter.__dict__: return
         meta = scatter.__dict__['metadata']
-        lot, param, unit_id, ro_info = meta['lot'], meta['param'], meta['units'][0], meta['ro']
+        lot, param, unit_id, ro_info = meta['lot'], meta['param'], meta['unit'], meta['ro']
         
         m = tk.Toplevel(self); m.title("Data Editor"); m.geometry("450x180")
         self.center_window(m, 450, 180); m.transient(self); m.grab_set()
         
         tk.Label(m, text=f"선택 시료 번호: {unit_id} ({ro_info})", font=("Arial", 11, "bold")).pack(pady=10)
-        color_section = tk.LabelFrame(m, text="변경할 색상 선택 (클릭 시 세모 마커로 자동 변환)", font=("Arial", 9))
+        color_section = tk.LabelFrame(m, text="변경할 색상 선택 (선택 시 세모 마커로 자동 변환)", font=("Arial", 9))
         color_section.pack(fill=tk.X, padx=15, pady=5)
         
-        # 이름 없이 예제 색상칩(정사각형 버튼)으로만 구성된 팔레트 제공 (첫 번째는 선명한 순수 빨간색)
-        distinct_palette = ["#FF0000", "#0A3D62", "#2ED573", "#8854D0", "#FA8231"]
+        # 요구사항 반영: 색상 이름 없이 예제 색상칩(정사각형 버튼)으로만 구성 (첫 번째는 선명한 순수 빨간색 #FF0000)
+        distinct_palette = ["#FF0000", "#0026ff", "#00b321", "#9400d3", "#ff8c00"]
         
         btn_frame = tk.Frame(color_section)
         btn_frame.pack(pady=5)
@@ -419,6 +424,7 @@ class DataAnalysisApp(tk.Tk):
         self.undo_stack.append(('delete', key, unit_id))
         self.execute_ui_rendering()
 
+    # 요구사항 반영: 되돌리기 역추적 알고리즘 핸들러
     def perform_undo(self):
         if not self.undo_stack:
             messagebox.showinfo("Undo", "되돌릴 작업 히스토리가 없습니다.")
@@ -458,11 +464,12 @@ class DataAnalysisApp(tk.Tk):
                                 ax = axes[r, c]
                                 
                                 for px, py, pc, pm, ro_lbl, b_col in m['dataset']:
-                                    ax.plot(px, py, color=b_col, alpha=0.6)
+                                    ax.plot(px, py, color=b_col, alpha=0.5, label=ro_lbl)
                                     for xi, yi, ci, mi in zip(px, py, pc, pm):
-                                        ax.scatter(xi, yi, color=ci, marker=mi, s=35 if mi=='^' else 20)
+                                        ax.scatter(xi, yi, color=ci, marker=mi, s=40 if mi=='^' else 20)
                                 
                                 ax.set_title(f"[{self.lot_display_names[lot_key]}] {m['title']}", fontsize=8, weight='bold')
+                                ax.set_xticks(range(len(m['all_samples'])))
                                 ax.set_xticklabels(m['all_samples'], rotation=15, fontsize=6)
                                 ax.grid(True, linestyle=":", alpha=0.4)
                             
@@ -499,7 +506,7 @@ class DataAnalysisApp(tk.Tk):
                             pdf.savefig(fig, dpi=200)
                             plt.close(fig)
                             
-            messagebox.showinfo("Success", "가로(Landscape) 포맷의 PDF 파일 생성이 정상적으로 끝났습니다.")
+            messagebox.showinfo("Success", "가로 포맷의 PDF 리포트 저장이 성공적으로 완료되었습니다.")
         except Exception as e:
             messagebox.showerror("PDF Export Error", f"PDF 컴파일 에러:\n{str(e)}")
 
