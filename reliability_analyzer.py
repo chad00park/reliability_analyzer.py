@@ -27,7 +27,7 @@ except:
 class DataAnalysisApp(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("Reliability Data Analyzer v3.8 - [Final Verified]")
+        self.title("Reliability Data Analyzer v3.9 - [Ambiguous Error Fixed]")
         self.geometry("1450x950")
         self.center_window(self, 1450, 950)
         
@@ -37,7 +37,6 @@ class DataAnalysisApp(tk.Tk):
         self.lot_groups = {}
         self.lot_display_names = {}
         
-        # 인터랙티브 상태 변수 (색상 변경, 데이터 삭제, 되돌리기 스택)
         self.custom_colors = {}   
         self.deleted_units = {}    
         self.undo_stack = []       
@@ -173,7 +172,6 @@ class DataAnalysisApp(tk.Tk):
         ctrl_f.pack(side=tk.RIGHT, padx=10)
         
         tk.Checkbutton(ctrl_f, text="Delta Mode (%)", variable=self.is_delta_mode, bg="#f4f4f4", command=self.start_async_render).pack(side=tk.LEFT, padx=5)
-        # 요구사항 반영: 되돌리기 (Undo) 버튼 배치
         tk.Button(ctrl_f, text="↩ 되돌리기 (Undo)", font=("Arial", 9, "bold"), bg="#7f8c8d", fg="white", command=self.perform_undo).pack(side=tk.LEFT, padx=5)
         tk.Button(ctrl_f, text="📄 가로 포맷 PDF 리포트 저장", font=("Arial", 9, "bold"), bg="#c0392b", fg="white", command=self.export_to_pdf).pack(side=tk.LEFT, padx=5)
 
@@ -230,54 +228,58 @@ class DataAnalysisApp(tk.Tk):
                     unit_str = self.raw_files_data[fn]['params'][param]['unit']; break
             if not unit_str: continue
 
-            master_df = pd.DataFrame(columns=['sample_id']).set_index('sample_id')
+            # 중복 인덱스 에러 방지를 위해 dict 기반의 매핑 테이블 설계로 변경 (Ambiguous Series 에러 완벽 해결)
+            master_map = {} 
+            all_samples_set = set()
+
             for filename in lot_files:
                 if param not in self.raw_files_data[filename]['params']: continue
                 p_info = self.raw_files_data[filename]['params'][param]
                 ro_lbl = self.raw_files_data[filename]['ro']
                 
-                f_df = pd.DataFrame({
-                    'sample_id': [str(x) for x in p_info['units_map']], ro_lbl: p_info['values']
-                }).set_index('sample_id')
-                f_df = f_df[~f_df.index.duplicated(keep='first')]
-                master_df = master_df.join(f_df, how='outer')
+                for s_id, val in zip(p_info['units_map'], p_info['values']):
+                    s_str = str(s_id)
+                    all_samples_set.add(s_str)
+                    if s_str not in master_map: master_map[s_str] = {}
+                    master_map[s_str][ro_lbl] = val
 
+            # 시료 명칭 정렬
             try:
-                master_df.index = pd.to_numeric(master_df.index)
+                all_samples = sorted(list(all_samples_set), key=lambda x: float(re.findall(r'\d+\.?\d*', x)[0]) if re.findall(r'\d+\.?\d*', x) else x)
             except:
-                pass
-            master_df = master_df.sort_index()
-            master_df.index = master_df.index.astype(str)
-            all_samples = master_df.index.tolist()
+                all_samples = sorted(list(all_samples_set))
 
-            # Delta Mode 기준 정밀 연산 수식 반영
+            # 에러 발생 원인 코드 수정: 객체 연산 대신 개별 데이터 요소 매핑 방식으로 안정화
             if self.is_delta_mode.get() and len(lot_files) > 0:
                 ref_ro = self.raw_files_data[lot_files[0]]['ro']
-                if ref_ro in master_df.columns:
-                    ref_series = pd.to_numeric(master_df[ref_ro], errors='coerce')
-                    for col in master_df.columns:
-                        col_series = pd.to_numeric(master_df[col], errors='coerce')
-                        master_df[col] = 100 * (col_series - ref_series) / ref_series
+                for s_id in all_samples:
+                    ref_val = master_map[s_id].get(ref_ro, None)
+                    if ref_val is not None and not np.isnan(ref_val) and ref_val != 0:
+                        for ro_lbl in master_map[s_id]:
+                            v = master_map[s_id][ro_lbl]
+                            if v is not None and not np.isnan(v):
+                                master_map[s_id][ro_lbl] = 100.0 * (v - ref_val) / ref_val
+                    else:
+                        # 기준값(0번째 Read-out)이 없거나 0인 경우 처리
+                        for ro_lbl in master_map[s_id]:
+                            master_map[s_id][ro_lbl] = np.nan
 
             del_set = self.deleted_units.get((target_lot, param), set())
             lines_dataset = []
 
             for f_idx, filename in enumerate(lot_files):
                 ro_lbl = self.raw_files_data[filename]['ro']
-                if ro_lbl not in master_df.columns: continue
                 
-                px, py, pc, pm, punit = [], [], [], [], []
+                px, py, pc, pm = [], [], [], []
                 for s_id in all_samples:
                     if s_id in del_set: continue
-                    val = master_df.loc[s_id, ro_lbl]
+                    val = master_map[s_id].get(ro_lbl, np.nan)
                     if pd.isna(val) or np.isinf(val): continue
                     
                     px.append(s_id)
                     py.append(float(val))
-                    punit.append(s_id)
                     
                     c_key = (target_lot, param, s_id)
-                    # 요구사항 반영: 색 수정 여부에 따른 세모(^) / 동그라미(o) 마커 쉐이프 제어
                     if c_key in self.custom_colors:
                         pc.append(self.custom_colors[c_key])
                         pm.append('^')
@@ -338,7 +340,6 @@ class DataAnalysisApp(tk.Tk):
                     for px, py, pc, pm, ro_lbl, b_col in m['dataset']:
                         ax.plot(px, py, color=b_col, alpha=0.5, zorder=1, label=ro_lbl)
                         for xi, yi, ci, mi in zip(px, py, pc, pm):
-                            # 데이터 수정 연결용 이벤트 피커(picker=True) 활성화 확인
                             sc = ax.scatter(xi, yi, color=ci, marker=mi, s=55 if mi=='^' else 35, zorder=3, picker=True)
                             sc.__dict__['metadata'] = {'lot': lot_key, 'param': m['param'], 'unit': xi, 'ro': ro_lbl}
                     
@@ -395,7 +396,6 @@ class DataAnalysisApp(tk.Tk):
         color_section = tk.LabelFrame(m, text="변경할 색상 선택 (선택 시 세모 마커로 자동 변환)", font=("Arial", 9))
         color_section.pack(fill=tk.X, padx=15, pady=5)
         
-        # 요구사항 반영: 색상 이름 없이 예제 색상칩(정사각형 버튼)으로만 구성 (첫 번째는 선명한 순수 빨간색 #FF0000)
         distinct_palette = ["#FF0000", "#0026ff", "#00b321", "#9400d3", "#ff8c00"]
         
         btn_frame = tk.Frame(color_section)
@@ -424,7 +424,6 @@ class DataAnalysisApp(tk.Tk):
         self.undo_stack.append(('delete', key, unit_id))
         self.execute_ui_rendering()
 
-    # 요구사항 반영: 되돌리기 역추적 알고리즘 핸들러
     def perform_undo(self):
         if not self.undo_stack:
             messagebox.showinfo("Undo", "되돌릴 작업 히스토리가 없습니다.")
