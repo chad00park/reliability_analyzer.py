@@ -24,7 +24,7 @@ except:
 class DataAnalysisApp(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("Reliability Data Analyzer v3.0 - [High Performance]")
+        self.title("Reliability Data Analyzer v3.1 - [Lot Renaming Enabled]")
         self.geometry("1450x950")
         
         self.raw_files_data = {}  
@@ -32,9 +32,13 @@ class DataAnalysisApp(tk.Tk):
         self.selected_parameters = []
         self.lot_groups = {}
         
-        # 제어 변수 (Tracking 제거, Delta 유지)
-        self.is_delta_mode = tk.BooleanVar(value=False)
+        # 이름 변경 추적을 위한 딕셔너리 (기본값은 파싱된 오리지널 Lot Name)
+        self.lot_display_names = {}
         
+        # 실시간 UI 업데이트를 위한 피겨/캔버스/라벨 오브젝트 캐싱 저장소
+        self.cached_plots = {} 
+        
+        self.is_delta_mode = tk.BooleanVar(value=False)
         self.init_upload_menu()
         
     def init_upload_menu(self):
@@ -59,8 +63,7 @@ class DataAnalysisApp(tk.Tk):
             with open(path, 'r', encoding='utf-8', errors='ignore') as f:
                 for line in f:
                     col_count = len(line.split(','))
-                    if col_count > max_cols:
-                        max_cols = col_count
+                    if col_count > max_cols: max_cols = col_count
             return pd.read_csv(path, header=None, names=range(max_cols), engine='python')
         else:
             return pd.read_excel(path, header=None)
@@ -96,7 +99,6 @@ class DataAnalysisApp(tk.Tk):
                 
                 d_start = max(p_idx, u_idx) + 1
                 units = df.iloc[d_start:, 0].dropna().astype(str).tolist()
-                
                 raw_p = df.iloc[p_idx, 1:].tolist()
                 raw_u = df.iloc[u_idx, 1:].tolist()
                 
@@ -136,7 +138,11 @@ class DataAnalysisApp(tk.Tk):
             self.parameter_list = sorted(list(all_p))
             if len(self.parameter_list) > 200: raise ValueError("Parameter 200개 초과")
             self.raw_files_data = temp_data
-            for l in self.lot_groups: self.lot_groups[l].sort(key=lambda x: self.raw_files_data[x]['ro_num'])
+            
+            for l in self.lot_groups: 
+                self.lot_groups[l].sort(key=lambda x: self.raw_files_data[x]['ro_num'])
+                self.lot_display_names[l] = l # 초기 디스플레이 이름 세팅
+                
             self.init_analysis_menu()
         except Exception as e: messagebox.showerror("Error", str(e))
 
@@ -147,12 +153,13 @@ class DataAnalysisApp(tk.Tk):
         
         ctrl_f = tk.LabelFrame(t, text="Advanced Analysis Control", font=("Arial", 9, "bold"), bg="#f4f4f4", padx=10)
         ctrl_f.pack(side=tk.RIGHT, padx=10)
-        tk.Checkbutton(ctrl_f, text="Delta Mode (%)", variable=self.is_delta_mode, bg="#f4f4f4", command=self.start_async_render).pack(side=LEFT, padx=5)
+        
+        # 1. LEFT -> tk.LEFT 에러 수정 완료
+        tk.Checkbutton(ctrl_f, text="Delta Mode (%)", variable=self.is_delta_mode, bg="#f4f4f4", command=self.start_async_render).pack(side=tk.LEFT, padx=5)
 
         tk.Label(t, text="Parameter Selector (Ctrl/Shift 키로 다중 선택 가능):", font=("Arial", 11, "bold"), bg="#f4f4f4").pack(anchor="w")
         lf = tk.Frame(t); lf.pack(fill=tk.X, pady=5)
         
-        # 5. 원하는 것만 골라서 다중 선택할 수 있도록 export를 EXTENDED 모드로 유지 및 인덱스 맵 개선
         self.param_listbox = tk.Listbox(lf, selectmode=tk.EXTENDED, height=6, font=("Consolas", 10))
         self.param_listbox.pack(fill=tk.X, side=tk.LEFT, expand=True)
         sb = ttk.Scrollbar(lf, command=self.param_listbox.yview); sb.pack(side=tk.RIGHT, fill=tk.Y)
@@ -165,7 +172,6 @@ class DataAnalysisApp(tk.Tk):
         btn_f = tk.Frame(t, bg="#f4f4f4"); btn_f.pack(fill=tk.X)
         tk.Button(btn_f, text="그래프 그리기", bg="#107c41", fg="white", font=("Arial", 10, "bold"), command=self.start_async_render).pack(side=tk.LEFT, padx=5)
         
-        # 마우스 스크롤이 가능한 메인 캔버스 영역 구성
         c = tk.Frame(self); c.pack(fill=tk.BOTH, expand=True)
         self.canvas = tk.Canvas(c, highlightthickness=0)
         self.scrollable_frame = tk.Frame(self.canvas)
@@ -174,11 +180,9 @@ class DataAnalysisApp(tk.Tk):
         self.canvas_window = self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
         self.canvas.configure(yscrollcommand=sb_v.set)
         
-        # 1. 마우스 스크롤 이벤트 바인딩 설정 및 가로 폭 동적 연동
         self.scrollable_frame.bind("<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
         self.canvas.bind('<Configure>', lambda e: self.canvas.itemconfig(self.canvas_window, width=e.width))
         
-        # Windows/Mac 공용 마우스 휠 바인딩
         self.canvas.bind_all("<MouseWheel>", self._on_mouse_wheel)
         self.canvas.bind_all("<Button-4>", self._on_mouse_wheel)
         self.canvas.bind_all("<Button-5>", self._on_mouse_wheel)
@@ -186,76 +190,51 @@ class DataAnalysisApp(tk.Tk):
         self.start_async_render()
 
     def _on_mouse_wheel(self, event):
-        """1. 마우스 스크롤 위아래 동작 처리 함수"""
-        if event.num == 4:
-            self.canvas.yview_scroll(-1, "units")
-        elif event.num == 5:
-            self.canvas.yview_scroll(1, "units")
-        else:
-            self.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        if event.num == 4: self.canvas.yview_scroll(-1, "units")
+        elif event.num == 5: self.canvas.yview_scroll(1, "units")
+        else: self.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
 
     def start_async_render(self):
-        """2. 멀티스레딩 분석 연산 실행 규칙 적용"""
-        # 리스트박스 선택 값 파싱 성능 최적화
         selections = self.param_listbox.curselection()
         sel_items = [self.param_listbox.get(i) for i in selections]
         
-        if "★ 전체 선택" in sel_items:
-            self.selected_parameters = self.parameter_list.copy()
-        else:
-            self.selected_parameters = [v for v in sel_items if v != "★ 전체 선택"]
+        if "★ 전체 선택" in sel_items: self.selected_parameters = self.parameter_list.copy()
+        else: self.selected_parameters = [v for v in sel_items if v != "★ 전체 선택"]
             
-        if not self.selected_parameters:
-            return
-
-        # 백그라운드 스레드로 연산 및 화면 렌더링 분리
+        if not self.selected_parameters: return
         threading.Thread(target=self.render_analysis_worker, daemon=True).start()
 
     def render_analysis_worker(self):
-        """2. 진행 현황 % 표기 알고리즘 구현부"""
         start_time = time.time()
-        popup = None
-        p_bar = None
-        lbl_status = None
+        popup, p_bar, lbl_status = None, None, None
         
-        # 총 작업량 계산 (Lot 개수 * 선택된 Parameter 개수)
         total_steps = len(self.lot_groups) * len(self.selected_parameters)
         if total_steps == 0: return
         current_step = 0
 
-        # UI 청소용 데이터 컨테이너
         ui_commands = []
         base_colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf']
 
         for lot in sorted(self.lot_groups.keys()):
             lot_files = self.lot_groups[lot]
-            ui_commands.append(('title', f"■ [{lot}] Lot Analysis", lot))
             
-            # 4. Module 조건일 경우 한 줄에 3개 배치를 위한 레이아웃 매니저 구조 설계
-            if self.data_mode == "Module":
-                ui_commands.append(('start_grid', lot))
+            # 유저 커스텀 타이틀 반영 및 명령 적재
+            ui_commands.append(('title', lot))
+            if self.data_mode == "Module": ui_commands.append(('start_grid', lot))
 
             for param in self.selected_parameters:
-                # 3초 임계점 체크 후 프로그레스 팝업 로딩창 동적 오픈
                 if popup is None and (time.time() - start_time) > 1.0:
-                    popup = tk.Toplevel(self)
-                    popup.title("Processing")
-                    popup.geometry("350x120")
-                    popup.transient(self)
-                    popup.grab_set()
+                    popup = tk.Toplevel(self); popup.title("Processing"); popup.geometry("350x120"); popup.transient(self); popup.grab_set()
                     tk.Label(popup, text="신뢰성 데이터를 실시간 분석 중입니다...", font=("Arial", 10, "bold")).pack(pady=10)
-                    p_bar = ttk.Progressbar(popup, length=280, mode='determinate')
-                    p_bar.pack(pady=5)
-                    lbl_status = tk.Label(popup, text="0%", font=("Arial", 9))
-                    lbl_status.pack()
+                    p_bar = ttk.Progressbar(popup, length=280, mode='determinate'); p_bar.pack(pady=5)
+                    lbl_status = tk.Label(popup, text="0%", font=("Arial", 9)); lbl_status.pack()
 
                 unit_str = ""; initial_vals = {}
                 for fn in lot_files:
                     if param in self.raw_files_data[fn]['params']:
                         unit_str = self.raw_files_data[fn]['params'][param]['unit']; break
                 if not unit_str:
-                    current_step += 1
-                    continue
+                    current_step += 1; continue
 
                 if self.is_delta_mode.get():
                     ref_fn = lot_files[0]
@@ -264,7 +243,6 @@ class DataAnalysisApp(tk.Tk):
                         for u_id, v in zip(p_ref['units_map'], p_ref['values']):
                             if v is not None and not np.isnan(v) and v != 0: initial_vals[u_id] = v
 
-                # 4. 모듈 유무에 따른 차트 종횡비 최적화 피팅
                 fig_w = 4.2 if self.data_mode == "Module" else 13.0
                 fig_h = 2.5 if self.data_mode == "Module" else 2.0
                 fig, ax = plt.subplots(figsize=(fig_w, fig_h))
@@ -290,14 +268,16 @@ class DataAnalysisApp(tk.Tk):
                         ax.scatter(px, py, color=pc, s=35, label=ro_lbl, zorder=3)
                 
                 display_unit = "%" if self.is_delta_mode.get() else unit_str
-                ax.set_title(f"{param} ({display_unit})", fontsize=9, weight='bold')
+                
+                # 가변적인 타이틀 설정을 위해 메타 속성 주입
+                fig.__dict__['base_title'] = f"{param} ({display_unit})"
+                ax.set_title(f"[{self.lot_display_names[lot]}] {fig.__dict__['base_title']}", fontsize=9, weight='bold')
                 ax.grid(True, linestyle=":", alpha=0.5)
                 ax.legend(loc="upper right", fontsize=7)
                 plt.tight_layout()
                 
                 ui_commands.append(('plot', fig, lot))
                 
-                # 프로그레스바 갱신 호출
                 current_step += 1
                 pct = int((current_step / total_steps) * 100)
                 if p_bar and popup:
@@ -321,18 +301,20 @@ class DataAnalysisApp(tk.Tk):
                 ax.set_xticks(range(1, len(a_labels) + 1))
                 ax.set_xticklabels(a_labels, fontsize=8)
                 for patch, color in zip(bp['boxes'], b_cols): patch.set_facecolor(color); patch.set_alpha(0.6)
-                ax.set_title(f"{param} Dist", fontsize=9, weight='bold'); ax.grid(True, alpha=0.3)
+                
+                fig.__dict__['base_title'] = f"{param} Dist"
+                ax.set_title(f"[{self.lot_display_names[lot]}] {fig.__dict__['base_title']}", fontsize=9, weight='bold')
+                ax.grid(True, alpha=0.3)
                 plt.tight_layout()
                 
-                ui_commands.append(('box_plot', fig, stats))
+                ui_commands.append(('box_plot', fig, stats, lot))
 
-        # 메인 UI 스레드에 최종 드로잉 명령 전달 (인터페이스 안전성 유지)
         self.after(0, lambda: self.execute_ui_rendering(ui_commands, popup))
 
     def execute_ui_rendering(self, commands, popup):
-        """2. 가벼워진 GUI 컴포넌트 갱신 순서 처리 기능"""
         for w in self.scrollable_frame.winfo_children(): w.destroy()
         
+        self.cached_plots = {} 
         current_frame = None
         grid_idx = 0
         box_frame = None
@@ -340,30 +322,58 @@ class DataAnalysisApp(tk.Tk):
         
         for cmd in commands:
             if cmd[0] == 'title':
-                tk.Label(self.scrollable_frame, text=cmd[1], font=("Arial", 13, "bold"), fg="#1e3799", pady=10).pack(anchor="w", padx=10)
+                lot_key = cmd[1]
+                
+                # 상단 Lot 이름 동적 컨트롤 박스 배치
+                header_f = tk.Frame(self.scrollable_frame, bg="#eaf2f8", pady=6)
+                header_f.pack(fill=tk.X, padx=10, pady=5)
+                
+                lbl = tk.Label(header_f, text=f"■ [{self.lot_display_names[lot_key]}] Lot Analysis", font=("Arial", 13, "bold"), fg="#1e3799", bg="#eaf2f8")
+                lbl.pack(side=tk.LEFT, padx=10)
+                
+                # 실시간 변경 입력 인터페이스 구축
+                rename_f = tk.Frame(header_f, bg="#eaf2f8")
+                rename_f.pack(side=tk.RIGHT, padx=15)
+                tk.Label(rename_f, text="Lot명 커스텀:", font=("Arial", 9), bg="#eaf2f8").pack(side=tk.LEFT, padx=2)
+                
+                ent = tk.Entry(rename_f, width=15, font=("Arial", 9))
+                ent.insert(0, self.lot_display_names[lot_key])
+                ent.pack(side=tk.LEFT, padx=5)
+                
+                btn = tk.Button(rename_f, text="변경", font=("Arial", 8, "bold"), bg="#546e7a", fg="white",
+                                command=lambda l=lot_key, e=ent: self.update_lot_name(l, e.get()))
+                btn.pack(side=tk.LEFT)
+                
+                if lot_key not in self.cached_plots: self.cached_plots[lot_key] = {'labels': [], 'canvases': []}
+                self.cached_plots[lot_key]['labels'].append(lbl)
             
             elif cmd[0] == 'start_grid':
+                lot_key = cmd[1]
                 current_frame = tk.Frame(self.scrollable_frame)
                 current_frame.pack(fill=tk.X, padx=15, pady=5)
+                # 2. 호환성이 검증된 명칭으로 완전히 교체 완료
                 for c in range(3): current_frame.grid_columnconfigure(c, weight=1)
                 grid_idx = 0
                 
             elif cmd[0] == 'plot':
                 fig = cmd[1]
+                lot_key = cmd[2]
                 if self.data_mode == "Module" and current_frame:
-                    # 4. Module 일 때 가로 3개 배치 실행
                     cell = tk.Frame(current_frame, bd=1, relief=tk.RIDGE, bg="white")
                     cell.grid(row=grid_idx//3, column=grid_idx%3, padx=4, pady=4, sticky="nsew")
-                    FigureCanvasTkAgg(fig, master=cell).get_tk_widget().pack(fill=tk.BOTH, expand=True)
+                    canvas = FigureCanvasTkAgg(fig, master=cell)
+                    canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
                     grid_idx += 1
                 else:
-                    # Discrete 일 때는 가로 1개 꽉 차게 배치
                     cell = tk.Frame(self.scrollable_frame, bd=1, relief=tk.RIDGE, bg="white")
                     cell.pack(fill=tk.X, padx=15, pady=4)
-                    FigureCanvasTkAgg(fig, master=cell).get_tk_widget().pack(fill=tk.X, expand=True)
-                plt.close(fig)
+                    canvas = FigureCanvasTkAgg(fig, master=cell)
+                    canvas.get_tk_widget().pack(fill=tk.X, expand=True)
+                
+                self.cached_plots[lot_key]['canvases'].append((fig, canvas))
                 
             elif cmd[0] == 'start_box_grid':
+                lot_key = cmd[1]
                 box_frame = tk.Frame(self.scrollable_frame, bg="#f9f9f9")
                 box_frame.pack(fill=tk.X, padx=15, pady=10)
                 for c in range(4): box_frame.grid_columnconfigure(c, weight=1)
@@ -372,20 +382,38 @@ class DataAnalysisApp(tk.Tk):
             elif cmd[0] == 'box_plot':
                 fig = cmd[1]
                 stats = cmd[2]
+                lot_key = cmd[3]
                 bb = tk.Frame(box_frame, bd=1, relief=tk.GROOVE, bg="white")
                 bb.grid(row=box_idx//4, column=box_idx%4, padx=5, pady=5, sticky="nsew")
                 box_idx += 1
                 
-                FigureCanvasTkAgg(fig, master=bb).get_tk_widget().pack()
-                sf = tk.Frame(bb, bg="#fafafa")
-                sf.pack(fill=tk.X)
+                canvas = FigureCanvasTkAgg(fig, master=bb)
+                canvas.get_tk_widget().pack()
+                sf = tk.Frame(bb, bg="#fafafa"); sf.pack(fill=tk.X)
                 for s in stats: 
                     tk.Label(sf, text=s, font=("Arial", 7), bg="#fafafa", justify=tk.LEFT).pack(anchor="w", padx=5)
-                plt.close(fig)
+                
+                self.cached_plots[lot_key]['canvases'].append((fig, canvas))
 
         if popup: 
-            popup.grab_release()
-            popup.destroy()
+            popup.grab_release(); popup.destroy()
+
+    def update_lot_name(self, lot_key, new_name):
+        """임의로 수정한 Lot Name을 Line/Box Plot 전체 그래프에 즉시 실시간 동기화 반영하는 전용 함수"""
+        if not new_name.strip(): return
+        self.lot_display_names[lot_key] = new_name.strip()
+        
+        if lot_key in self.cached_plots:
+            # 1. 텍스트 라벨 컴포넌트 업데이트
+            for lbl in self.cached_plots[lot_key]['labels']:
+                lbl.config(text=f"■ [{new_name}] Lot Analysis")
+            
+            # 2. 모든 Matplotlib 피겨의 Title 축 일괄 재조정 및 캔버스 다시 그리기(Draw)
+            for fig, canvas in self.cached_plots[lot_key]['canvases']:
+                for ax in fig.get_axes():
+                    base = fig.__dict__.get('base_title', '')
+                    ax.set_title(f"[{new_name}] {base}", fontsize=9, weight='bold')
+                canvas.draw_idle() # 가벼운 부분 리렌더링
 
 if __name__ == "__main__":
     DataAnalysisApp().mainloop()
