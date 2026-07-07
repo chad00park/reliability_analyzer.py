@@ -12,6 +12,12 @@ matplotlib.use("TkAgg")
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import matplotlib.pyplot as plt
 
+# PDF 출력을 위한 라이브러리
+try:
+    from matplotlib.backends.backend_pdf import PdfPages
+except ImportError:
+    pass
+
 # 한글 깨짐 방지
 import matplotlib.font_manager as fm
 try:
@@ -24,22 +30,27 @@ except:
 class DataAnalysisApp(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("Reliability Data Analyzer v3.2 - [Stable Version]")
+        self.title("Reliability Data Analyzer v3.4 - [Precise Alignment]")
         self.geometry("1450x950")
-        self.center_window(self, 1450, 950) # 메인 창도 중앙 정렬
+        self.center_window(self, 1450, 950)
         
         self.raw_files_data = {}  
         self.parameter_list = []
         self.selected_parameters = []
         self.lot_groups = {}
+        
         self.lot_display_names = {}
         self.cached_plots = {} 
+        
+        # 인터랙티브 상태 저장소
+        self.custom_colors = {}   # {(lot, param, unit): color_str}
+        self.deleted_units = {}    # {(lot, param): set(unit, ...)}
+        self.undo_stack = []       # 작업 히스토리용 스택
         
         self.is_delta_mode = tk.BooleanVar(value=False)
         self.init_upload_menu()
         
     def center_window(self, win, w, h):
-        """1. 모든 팝업 및 창을 화면 정중앙에 위치시키는 유틸리티 함수"""
         win.update_idletasks()
         ws = win.winfo_screenwidth()
         hs = win.winfo_screenheight()
@@ -79,7 +90,7 @@ class DataAnalysisApp(tk.Tk):
         if not files: return
         
         m = tk.Toplevel(self); m.title("Mode"); m.transient(self); m.grab_set()
-        self.center_window(m, 300, 120) # 1. 모드 선택 팝업 중앙 정렬
+        self.center_window(m, 300, 120)
         
         tk.Label(m, text="데이터 유형 선택", font=("Arial", 10, "bold")).pack(pady=10)
         f = tk.Frame(m); f.pack()
@@ -91,23 +102,36 @@ class DataAnalysisApp(tk.Tk):
 
     def process_files(self, files):
         try:
+            # 1. 메인 레이아웃 및 기준점 행 찾기
             df_s = self.smart_read_csv_or_excel(files[0])
-            p_idx, u_idx = None, None
-            for i, r in df_s.iterrows():
-                v = str(r.iloc[0]).strip().lower()
-                if "parameter" in v: p_idx = i
-                if "unit" in v: u_idx = i
+            p_idx, u_idx, sample_idx = None, None, None
             
-            if p_idx is None or u_idx is None: raise ValueError("'Parameter'/'Unit' 행을 1열에서 찾을 수 없음")
+            for i, r in df_s.iterrows():
+                val_first_col = str(r.iloc[0]).strip().lower().replace(" ", "")
+                if "parameter" in val_first_col: p_idx = i
+                if "unit" in val_first_col: u_idx = i
+                if "sample" in val_first_col: sample_idx = i # 2. 'sample' 행 인덱스 저장
+
+            if p_idx is None or u_idx is None: 
+                raise ValueError("'Parameter' 혹은 'Unit' 정보를 원본 파일 1열에서 찾을 수 없습니다.")
+            
+            # 만약 sample 행이 명시적으로 발견되지 않았다면, 데이터 시작 기준행을 차선책으로 지정
+            if sample_idx is None:
+                sample_idx = max(p_idx, u_idx) + 1
 
             temp_data, all_p, self.lot_groups = {}, set(), {}
+            
+            # 파일 리스트 정렬 후 로드 진행
             for path in files:
                 fname = os.path.basename(path)
                 lot, ro, ro_n = self.parse_filename_info(fname)
                 df = self.smart_read_csv_or_excel(path)
                 
+                # 2. X축 시료 고유 명칭 행 추출 연동 (첫 파일에서 찾아낸 고정된 sample_idx 행 강제 적용)
+                # 1열 이후(인덱스 1번부터 끝까지)의 데이터를 시료 리스트로 수집합니다.
+                units = df.iloc[sample_idx, 1:].dropna().astype(str).tolist()
+                
                 d_start = max(p_idx, u_idx) + 1
-                units = df.iloc[d_start:, 0].dropna().astype(str).tolist()
                 raw_p = df.iloc[p_idx, 1:].tolist()
                 raw_u = df.iloc[u_idx, 1:].tolist()
                 
@@ -137,6 +161,8 @@ class DataAnalysisApp(tk.Tk):
                     vals = pd.to_numeric(df.iloc[d_start:, c_idx+1], errors='coerce').tolist()
                     vals = vals[:len(units)]
                     if all(v is None or np.isnan(v) for v in vals): continue
+                    
+                    # 수집된 시료 개수 정보 매칭 맵 구축
                     p_dict[pn] = {'unit': un, 'values': vals, 'units_map': units[:len(vals)]}
                     all_p.add(pn)
                 
@@ -145,7 +171,6 @@ class DataAnalysisApp(tk.Tk):
                 self.lot_groups[lot].append(fname)
 
             self.parameter_list = sorted(list(all_p))
-            if len(self.parameter_list) > 200: raise ValueError("Parameter 200개 초과")
             self.raw_files_data = temp_data
             
             for l in self.lot_groups: 
@@ -163,8 +188,14 @@ class DataAnalysisApp(tk.Tk):
         ctrl_f.pack(side=tk.RIGHT, padx=10)
         
         tk.Checkbutton(ctrl_f, text="Delta Mode (%)", variable=self.is_delta_mode, bg="#f4f4f4", command=self.start_async_render).pack(side=tk.LEFT, padx=5)
+        
+        # 4. 되돌리기 버튼 기동
+        tk.Button(ctrl_f, text="↩ 되돌리기 (Undo)", font=("Arial", 9, "bold"), bg="#7f8c8d", fg="white", command=self.perform_undo).pack(side=tk.LEFT, padx=5)
+        
+        # 5. PDF 보고서 출력 다운로드 버튼 컴백 복구
+        tk.Button(ctrl_f, text="📄 PDF 리포트 저장", font=("Arial", 9, "bold"), bg="#c0392b", fg="white", command=self.export_to_pdf).pack(side=tk.LEFT, padx=5)
 
-        tk.Label(t, text="Parameter Selector (Ctrl/Shift 키로 다중 선택 가능):", font=("Arial", 11, "bold"), bg="#f4f4f4").pack(anchor="w")
+        tk.Label(t, text="Parameter Selector (다중 선택 가능):", font=("Arial", 11, "bold"), bg="#f4f4f4").pack(anchor="w")
         lf = tk.Frame(t); lf.pack(fill=tk.X, pady=5)
         
         self.param_listbox = tk.Listbox(lf, selectmode=tk.EXTENDED, height=6, font=("Consolas", 10))
@@ -191,15 +222,10 @@ class DataAnalysisApp(tk.Tk):
         self.canvas.bind('<Configure>', lambda e: self.canvas.itemconfig(self.canvas_window, width=e.width))
         
         self.canvas.bind_all("<MouseWheel>", self._on_mouse_wheel)
-        self.canvas.bind_all("<Button-4>", self._on_mouse_wheel)
-        self.canvas.bind_all("<Button-5>", self._on_mouse_wheel)
-        
         self.start_async_render()
 
     def _on_mouse_wheel(self, event):
-        if event.num == 4: self.canvas.yview_scroll(-1, "units")
-        elif event.num == 5: self.canvas.yview_scroll(1, "units")
-        else: self.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        self.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
 
     def start_async_render(self):
         selections = self.param_listbox.curselection()
@@ -210,21 +236,16 @@ class DataAnalysisApp(tk.Tk):
             
         if not self.selected_parameters: return
         
-        # 팝업 생성 및 중앙 정렬 (메인 스레드에서 즉시 실행)
-        popup = tk.Toplevel(self)
-        popup.title("Processing")
-        popup.transient(self); popup.grab_set()
-        self.center_window(popup, 350, 120) # 1. 진행률 팝업 중앙 정렬
+        popup = tk.Toplevel(self); popup.title("Processing"); popup.transient(self); popup.grab_set()
+        self.center_window(popup, 350, 120)
         
         tk.Label(popup, text="신뢰성 데이터를 실시간 분석 중입니다...", font=("Arial", 10, "bold")).pack(pady=10)
         p_bar = ttk.Progressbar(popup, length=280, mode='determinate'); p_bar.pack(pady=5)
         lbl_status = tk.Label(popup, text="0%", font=("Arial", 9)); lbl_status.pack()
         
-        # 순수 데이터 정제 연산만 안전하게 백그라운드 스레드로 실행
         threading.Thread(target=self.render_analysis_worker, args=(popup, p_bar, lbl_status), daemon=True).start()
 
     def render_analysis_worker(self, popup, p_bar, lbl_status):
-        """[Termination 원인 해결]: 무거운 수학 연산 데이터 추출만 스레드에서 수행"""
         total_steps = len(self.lot_groups) * len(self.selected_parameters)
         if total_steps == 0: return
         current_step = 0
@@ -253,47 +274,67 @@ class DataAnalysisApp(tk.Tk):
                             if v is not None and not np.isnan(v) and v != 0: initial_vals[u_id] = v
 
                 lines_dataset = []
+                del_set = self.deleted_units.get((lot, param), set())
+
                 for f_idx, filename in enumerate(lot_files):
                     if param not in self.raw_files_data[filename]['params']: continue
                     p_info = self.raw_files_data[filename]['params'][param]
                     ro_lbl = self.raw_files_data[filename]['ro']
                     
-                    px, py, pc = [], [], []
+                    px, py, pc, punit = [], [], [] ,[]
                     for ux, uy in zip(p_info['units_map'], p_info['values']):
                         if uy is None or np.isnan(uy): continue
+                        if str(ux) in del_set: continue  # 사용자 삭제 데이터 필터 제외 탈락
+                        
                         val_to_plot = uy
                         if self.is_delta_mode.get():
                             if ux in initial_vals: val_to_plot = 100 * (uy - initial_vals[ux]) / initial_vals[ux]
                             else: continue
                         
-                        px.append(str(ux)); py.append(val_to_plot)
-                        pc.append(base_colors[f_idx % len(base_colors)])
+                        px.append(str(ux))
+                        py.append(val_to_plot)
+                        punit.append(str(ux))
+                        
+                        c_key = (lot, param, str(ux))
+                        if c_key in self.custom_colors:
+                            pc.append(self.custom_colors[c_key])
+                        else:
+                            pc.append(base_colors[f_idx % len(base_colors)])
 
                     if px:
-                        lines_dataset.append((px, py, pc, ro_lbl, base_colors[f_idx % len(base_colors)]))
+                        lines_dataset.append((px, py, pc, punit, ro_lbl, base_colors[f_idx % len(base_colors)]))
                 
                 display_unit = "%" if self.is_delta_mode.get() else unit_str
                 prepared_data.append(('plot', lot, {
+                    'param_name': param,
                     'base_title': f"{param} ({display_unit})",
                     'dataset': lines_dataset
                 }))
                 
                 current_step += 1
                 pct = int((current_step / total_steps) * 100)
-                # 메인스레드 UI 프로그레스 바 업데이트 요청
                 self.after(0, lambda p=pct: [p_bar.config(value=p), lbl_status.config(text=f"{p}%")])
 
-            # Box Plots 데이터 가공
+            # Box Plots
             prepared_data.append(('start_box_grid', lot, None))
             for param in self.selected_parameters:
                 b_data, a_labels, b_cols, stats = [], [], [], []
+                del_set = self.deleted_units.get((lot, param), set())
+
                 for f_idx, fn in enumerate(lot_files):
                     if param in self.raw_files_data[fn]['params']:
-                        vals = [v for v in self.raw_files_data[fn]['params'][param]['values'] if v is not None and not np.isnan(v)]
+                        p_info = self.raw_files_data[fn]['params'][param]
+                        
+                        vals = []
+                        for ux, uy in zip(p_info['units_map'], p_info['values']):
+                            if uy is not None and not np.isnan(uy) and str(ux) not in del_set:
+                                vals.append(uy)
+                                
                         if vals:
-                            b_data.append(vals); a_labels.append(self.raw_files_data[fn]['ro'])
+                            b_data.append(vals)
+                            a_labels.append(self.raw_files_data[fn]['ro'])
                             b_cols.append(base_colors[f_idx % len(base_colors)])
-                            stats.append(f"[{self.raw_files_data[fn]['ro']}]\nAvg:{np.mean(vals):.1f} Std:{np.std(vals):.1f}")
+                            stats.append(f"[{self.raw_files_data[fn]['ro']}]\nAvg:{np.mean(vals):.1f}\nStd:{np.std(vals):.1f}")
                 if not b_data: continue
 
                 prepared_data.append(('box_plot', lot, {
@@ -301,18 +342,14 @@ class DataAnalysisApp(tk.Tk):
                     'b_data': b_data, 'a_labels': a_labels, 'b_cols': b_cols, 'stats': stats
                 }))
 
-        # 연산이 완료되면 GUI 생성 메인스레드로 데이터를 토스하여 렌더링하도록 유도
         self.after(0, lambda: self.execute_ui_rendering(prepared_data, popup))
 
     def execute_ui_rendering(self, commands, popup):
-        """[Termination 원인 해결]: 캔버스 및 피겨 생성은 오직 자식 스레드가 아닌 안전한 메인 스레드에서만 수행"""
         for w in self.scrollable_frame.winfo_children(): w.destroy()
         
         self.cached_plots = {} 
-        current_frame = None
-        grid_idx = 0
-        box_frame = None
-        box_idx = 0
+        current_frame, box_frame = None, None
+        grid_idx, box_idx = 0, 0
         
         for cmd_type, lot_key, meta in commands:
             if cmd_type == 'title':
@@ -322,9 +359,10 @@ class DataAnalysisApp(tk.Tk):
                 lbl = tk.Label(header_f, text=f"■ [{self.lot_display_names[lot_key]}] Lot Analysis", font=("Arial", 13, "bold"), fg="#1e3799", bg="#eaf2f8")
                 lbl.pack(side=tk.LEFT, padx=10)
                 
+                # 1. 복수 Lot 개별 관리 가능한 독립 변환 인터페이스 세팅
                 rename_f = tk.Frame(header_f, bg="#eaf2f8")
                 rename_f.pack(side=tk.RIGHT, padx=15)
-                tk.Label(rename_f, text="Lot명 커스텀:", font=("Arial", 9), bg="#eaf2f8").pack(side=tk.LEFT, padx=2)
+                tk.Label(rename_f, text="해당 Lot 명칭 변경:", font=("Arial", 9), bg="#eaf2f8").pack(side=tk.LEFT, padx=2)
                 
                 ent = tk.Entry(rename_f, width=15, font=("Arial", 9))
                 ent.insert(0, self.lot_display_names[lot_key])
@@ -345,18 +383,22 @@ class DataAnalysisApp(tk.Tk):
                 
             elif cmd_type == 'plot':
                 fig_w = 4.2 if self.data_mode == "Module" else 13.0
-                fig_h = 2.5 if self.data_mode == "Module" else 2.0
+                fig_h = 2.5 if self.data_mode == "Module" else 2.2
                 fig, ax = plt.subplots(figsize=(fig_w, fig_h))
                 
-                # 가공해 둔 순수 데이터 셋으로 매플롯 그리기 진행
-                for px, py, pc, ro_lbl, b_col in meta['dataset']:
+                param_name = meta['param_name']
+                
+                for px, py, pc, punit, ro_lbl, b_col in meta['dataset']:
                     ax.plot(px, py, color=b_col, alpha=0.5, zorder=1)
-                    ax.scatter(px, py, color=pc, s=35, label=ro_lbl, zorder=3)
+                    scatter = ax.scatter(px, py, color=pc, s=45, label=ro_lbl, zorder=3, picker=True)
+                    scatter.__dict__['metadata'] = {'lot': lot_key, 'param': param_name, 'units': punit, 'ro': ro_lbl}
                 
                 fig.__dict__['base_title'] = meta['base_title']
                 ax.set_title(f"[{self.lot_display_names[lot_key]}] {meta['base_title']}", fontsize=9, weight='bold')
                 ax.grid(True, linestyle=":", alpha=0.5)
-                ax.legend(loc="upper right", fontsize=7)
+                
+                # 3. 레전드 박스가 그래프 내부 빈 공간을 찾되 가리지 않도록 자동 최적화
+                ax.legend(loc="best", fontsize=7, framealpha=0.8)
                 plt.tight_layout()
 
                 if self.data_mode == "Module" and current_frame:
@@ -371,6 +413,7 @@ class DataAnalysisApp(tk.Tk):
                     canvas = FigureCanvasTkAgg(fig, master=cell)
                     canvas.get_tk_widget().pack(fill=tk.X, expand=True)
                 
+                fig.canvas.mpl_connect('pick_event', self.on_chart_point_clicked)
                 self.cached_plots[lot_key]['canvases'].append((fig, canvas))
                 plt.close(fig)
                 
@@ -406,10 +449,94 @@ class DataAnalysisApp(tk.Tk):
                 self.cached_plots[lot_key]['canvases'].append((fig, canvas))
                 plt.close(fig)
 
-        # 2. 모든 데이터 시각화 정렬이 끝나면 팝업을 수동 개입 없이 자동 해제(Destroy)
         if popup: 
-            popup.grab_release()
-            popup.destroy()
+            popup.grab_release(); popup.destroy()
+
+    def on_chart_point_clicked(self, event):
+        """4. 특정 데이터 마우스 포인트 피킹 선택 컨트롤러"""
+        scatter = event.artist
+        if 'metadata' not in scatter.__dict__: return
+        
+        meta = scatter.__dict__['metadata']
+        ind = event.ind[0]
+        
+        lot = meta['lot']
+        param = meta['param']
+        unit_id = meta['units'][ind]
+        ro_info = meta['ro']
+        
+        m = tk.Toplevel(self)
+        m.title("Interactive Data Editor")
+        m.geometry("450x180")
+        self.center_window(m, 450, 180)
+        m.transient(self); m.grab_set()
+        
+        tk.Label(m, text=f"선택한 시료 번호: {unit_id} ({ro_info})", font=("Arial", 11, "bold"), fg="#111111").pack(pady=10)
+        
+        # 4. 차트 기본색(Tab10)군과 완전 매칭을 피한 가독성 최상급 5개 커스텀 버튼 색상셋 제공 (빨간색 필두)
+        color_section = tk.LabelFrame(m, text="원하는 변경 색상 선택 (그래프 중복 방지 컬러셋)", font=("Arial", 9))
+        color_section.pack(fill=tk.X, padx=15, pady=5)
+        
+        distinct_palette = [
+            ("🔴 빨강", "#e74c3c"),
+            ("🔵 군청", "#0a3d62"),
+            ("🟢 연두", "#2ed573"),
+            ("🟣 보라", "#8854d0"),
+            ("🟠 주황", "#fa8231")
+        ]
+        
+        for text, hex_code in distinct_palette:
+            btn = tk.Button(color_section, text=text, font=("Arial", 8, "bold"), bg=hex_code, fg="white", padx=4,
+                            command=lambda l=lot, p=param, u=unit_id, c=hex_code: [m.destroy(), self.apply_point_color(l, p, u, c)])
+            btn.pack(side=tk.LEFT, expand=True, padx=2, pady=5)
+            
+        action_f = tk.Frame(m); action_f.pack(pady=10)
+        tk.Button(action_f, text="🗑️ 해당 시료 데이터 삭제 (Box연동)", bg="#2c3e50", fg="white", font=("Arial", 9, "bold"),
+                  command=lambda: [m.destroy(), self.delete_target_unit(lot, param, unit_id)]).pack(side=tk.LEFT, padx=10)
+        tk.Button(action_f, text="창 닫기", command=m.destroy, font=("Arial", 9)).pack(side=tk.LEFT, padx=10)
+
+    def apply_point_color(self, lot, param, unit_id, chosen_color):
+        c_key = (lot, param, unit_id)
+        old_color = self.custom_colors.get(c_key, None)
+        self.undo_stack.append(('color', c_key, old_color))
+        self.custom_colors[c_key] = chosen_color
+        self.refresh_current_charts()
+
+    def delete_target_unit(self, lot, param, unit_id):
+        key = (lot, param)
+        if key not in self.deleted_units:
+            self.deleted_units[key] = set()
+            
+        self.deleted_units[key].add(unit_id)
+        self.undo_stack.append(('delete', key, unit_id))
+        self.refresh_current_charts()
+
+    def perform_undo(self):
+        if not self.undo_stack:
+            messagebox.showinfo("Undo", "되돌릴 작업 히스토리가 없습니다.")
+            return
+        
+        action = self.undo_stack.pop()
+        action_type = action[0]
+        
+        if action_type == 'color':
+            c_key, old_val = action[1], action[2]
+            if old_val is None: self.custom_colors.pop(c_key, None)
+            else: self.custom_colors[c_key] = old_val
+                
+        elif action_type == 'delete':
+            key, unit_id = action[1], action[2]
+            if key in self.deleted_units:
+                self.deleted_units[key].discard(unit_id)
+                
+        self.refresh_current_charts()
+
+    def refresh_current_charts(self):
+        popup = tk.Toplevel(self); popup.title("Refreshing"); popup.transient(self); popup.grab_set()
+        self.center_window(popup, 300, 80)
+        tk.Label(popup, text="데이터 제어 상태 반영 중...", font=("Arial", 10)).pack(pady=25)
+        p_bar = ttk.Progressbar(popup, mode='indeterminate')
+        threading.Thread(target=self.render_analysis_worker, args=(popup, p_bar, tk.Label()), daemon=True).start()
 
     def update_lot_name(self, lot_key, new_name):
         if not new_name.strip(): return
@@ -418,12 +545,23 @@ class DataAnalysisApp(tk.Tk):
         if lot_key in self.cached_plots:
             for lbl in self.cached_plots[lot_key]['labels']:
                 lbl.config(text=f"■ [{new_name}] Lot Analysis")
-            
             for fig, canvas in self.cached_plots[lot_key]['canvases']:
                 for ax in fig.get_axes():
                     base = fig.__dict__.get('base_title', '')
                     ax.set_title(f"[{new_name}] {base}", fontsize=9, weight='bold')
                 canvas.draw_idle()
+
+    def export_to_pdf(self):
+        path = filedialog.asksaveasfilename(defaultextension=".pdf", filetypes=[("PDF 리포트 파일", "*.pdf")])
+        if not path: return
+        try:
+            with PdfPages(path) as pdf:
+                for lot_key in sorted(self.cached_plots.keys()):
+                    for fig, _ in self.cached_plots[lot_key]['canvases']:
+                        pdf.savefig(fig, dpi=200, bbox_inches='tight')
+            messagebox.showinfo("Success", "PDF 리포트 저장이 완료되었습니다!")
+        except Exception as e:
+            messagebox.showerror("Export Error", f"PDF 출력 오류:\n{str(e)}")
 
 if __name__ == "__main__":
     DataAnalysisApp().mainloop()
