@@ -22,8 +22,10 @@ except:
 class DataAnalysisApp(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("Reliability Data Analyzer v2.0 - [Lot/Unit/Delta Analysis]")
-        self.geometry("1450x980")
+        self.title("Reliability Data Analyzer v2.1 - [Fixed Compatibility]")
+        
+        # 1. Geometry 에러 해결: 범용적인 크기 지정 방식으로 수정
+        self.geometry("1400x900")
         
         self.raw_files_data = {}  
         self.parameter_list = []
@@ -53,6 +55,20 @@ class DataAnalysisApp(tk.Tk):
         ro_num = int(re.findall(r'\d+', ro_str)[0]) if re.findall(r'\d+', ro_str) else 99999
         return lot_str, ro_str, ro_num
 
+    def smart_read_csv_or_excel(self, path):
+        """4. Tokenizing 에러 해결: 파일 내 최대 열(Column) 개수를 수동으로 먼저 파악한 후 안전하게 로드"""
+        if path.endswith('.csv'):
+            max_cols = 0
+            with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                for line in f:
+                    col_count = len(line.split(','))
+                    if col_count > max_cols:
+                        max_cols = col_count
+            # 찾은 최대 열 크기만큼 가상의 이름을 부여해 불규칙한 데이터 구조도 전부 읽어옴
+            return pd.read_csv(path, header=None, names=range(max_cols), engine='python')
+        else:
+            return pd.read_excel(path, header=None)
+
     def handle_file_upload(self):
         files = filedialog.askopenfilenames(title="파일 선택", filetypes=[("Data Files", "*.csv *.xlsx *.xls")])
         if not files: return
@@ -67,9 +83,8 @@ class DataAnalysisApp(tk.Tk):
 
     def process_files(self, files):
         try:
-            # 헤더 탐색
-            first_path = files[0]
-            df_s = pd.read_csv(first_path, header=None) if first_path.endswith('.csv') else pd.read_excel(first_path, header=None)
+            # 첫 번째 파일에서 헤더 탐색
+            df_s = self.smart_read_csv_or_excel(files[0])
             p_idx, u_idx = None, None
             for i, r in df_s.iterrows():
                 v = str(r.iloc[0]).strip().lower()
@@ -82,11 +97,14 @@ class DataAnalysisApp(tk.Tk):
             for path in files:
                 fname = os.path.basename(path)
                 lot, ro, ro_n = self.parse_filename_info(fname)
-                df = pd.read_csv(path, header=None) if path.endswith('.csv') else pd.read_excel(path, header=None)
+                df = self.smart_read_csv_or_excel(path)
                 
                 d_start = max(p_idx, u_idx) + 1
-                units = df.iloc[d_start:, 0].astype(str).tolist()
-                raw_p, raw_u = df.iloc[p_idx, 1:].tolist(), df.iloc[u_idx, 1:].tolist()
+                units = df.iloc[d_start:, 0].dropna().astype(str).tolist()
+                
+                # 유효한 데이터 열만 슬라이싱 (NaN 제외 처리)
+                raw_p = df.iloc[p_idx, 1:].tolist()
+                raw_u = df.iloc[u_idx, 1:].tolist()
                 
                 # Module Prefix Logic
                 final_p, prefix = [], ""
@@ -110,11 +128,14 @@ class DataAnalysisApp(tk.Tk):
                 p_dict = {}
                 for c_idx, pn in enumerate(numbered_p):
                     if not pn or "cont_" in pn.lower(): continue
-                    un = str(raw_u[c_idx]).strip() if not pd.isna(raw_u[c_idx]) else ""
+                    un = str(raw_u[c_idx]).strip() if c_idx < len(raw_u) and not pd.isna(raw_u[c_idx]) else ""
                     if not un: continue
+                    
                     vals = pd.to_numeric(df.iloc[d_start:, c_idx+1], errors='coerce').tolist()
+                    # 유닛 개수와 값 개수 싱크 맞추기
+                    vals = vals[:len(units)]
                     if all(v is None or np.isnan(v) for v in vals): continue
-                    p_dict[pn] = {'unit': un, 'values': vals, 'units_map': units}
+                    p_dict[pn] = {'unit': un, 'values': vals, 'units_map': units[:len(vals)]}
                     all_p.add(pn)
                 
                 temp_data[fname] = {'lot': lot, 'ro': ro, 'ro_num': ro_n, 'params': p_dict}
@@ -153,9 +174,7 @@ class DataAnalysisApp(tk.Tk):
 
         btn_f = tk.Frame(t, bg="#f4f4f4"); btn_f.pack(fill=tk.X)
         tk.Button(btn_f, text="그래프 그리기", bg="#107c41", fg="white", font=("Arial", 10, "bold"), command=self.render_analysis_graphs).pack(side=tk.LEFT, padx=5)
-        self.btn_undo = tk.Button(btn_f, text="Undo", state=tk.DISABLED, command=self.trigger_undo); self.btn_undo.pack(side=tk.LEFT)
-        tk.Button(self, text="PDF Export", bg="#d24726", fg="white", command=self.export_plots_to_pdf).pack(side=tk.BOTTOM, pady=10)
-
+        
         c = tk.Frame(self); c.pack(fill=tk.BOTH, expand=True)
         self.canvas = tk.Canvas(c); self.scrollable_frame = tk.Frame(self.canvas)
         sb_v = ttk.Scrollbar(c, orient="vertical", command=self.canvas.yview); sb_v.pack(side=tk.RIGHT, fill=tk.Y)
@@ -186,7 +205,6 @@ class DataAnalysisApp(tk.Tk):
                         unit_str = self.raw_files_data[fn]['params'][param]['unit']; break
                 if not unit_str: continue
 
-                # Delta Mode 초기값 수집 (ro_num이 가장 작은 파일을 기준)
                 if self.is_delta_mode.get():
                     ref_fn = lot_files[0]
                     if param in self.raw_files_data[ref_fn]['params']:
@@ -204,7 +222,6 @@ class DataAnalysisApp(tk.Tk):
                     for ux, uy in zip(p_info['units_map'], p_info['values']):
                         if uy is None or np.isnan(uy): continue
                         
-                        # Delta 계산
                         val_to_plot = uy
                         if self.is_delta_mode.get():
                             if ux in initial_vals: val_to_plot = 100 * (uy - initial_vals[ux]) / initial_vals[ux]
@@ -212,7 +229,6 @@ class DataAnalysisApp(tk.Tk):
                         
                         px.append(str(ux)); py.append(val_to_plot)
                         
-                        # Unit Tracking 강조 로직
                         is_tracked = (str(ux) == target_unit)
                         pc.append(self.custom_point_colors.get((param, filename, str(ux)), base_colors[f_idx % len(base_colors)]))
                         ps.append(100 if is_tracked else 35)
@@ -246,20 +262,21 @@ class DataAnalysisApp(tk.Tk):
                 bb = tk.Frame(gc, bd=1, relief=tk.GROOVE, bg="white"); bb.grid(row=v_idx//4, column=v_idx%4, padx=5, pady=5, sticky="nsew")
                 v_idx += 1
                 fig, ax = plt.subplots(figsize=(3.2, 3.2))
-                bp = ax.boxplot(b_data, tick_labels=a_labels, patch_artist=True)
+                
+                # 2. Boxplot 버전에 따른 'labels' 호환성 우회 해결 방법 적용
+                bp = ax.boxplot(b_data, patch_artist=True)
+                ax.set_xticks(range(1, len(a_labels) + 1))
+                ax.set_xticklabels(a_labels)
+                
                 for patch, color in zip(bp['boxes'], b_cols): patch.set_facecolor(color); patch.set_alpha(0.7)
                 ax.set_title(f"{param}", fontsize=9, weight='bold'); ax.grid(True, alpha=0.3)
                 FigureCanvasTkAgg(fig, master=bb).get_tk_widget().pack()
                 sf = tk.Frame(bb, bg="#fafafa"); sf.pack(fill=tk.X)
                 for s in stats: tk.Label(sf, text=s, font=("Arial", 7), bg="#fafafa", justify=tk.LEFT).pack(anchor="w")
                 plt.close(fig)
+                
+            # 3. column_configure 대신 표준 grid_columnconfigure 사용 명시
             for c in range(4): gc.grid_columnconfigure(c, weight=1)
-
-    def trigger_undo(self): # (기존 Undo 로직 동일)
-        pass
-
-    def export_plots_to_pdf(self): # (가로 Landscape 8개 모아찍기 로직 동일)
-        pass
 
 if __name__ == "__main__":
     DataAnalysisApp().mainloop()
