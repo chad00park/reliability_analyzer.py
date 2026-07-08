@@ -1,33 +1,27 @@
-name: Build EXE
-
-on:
-  push:
-    branches: [ main ]
-  workflow_dispatch:
+name: build
+on: [push, pull_request]
 
 jobs:
   build:
-    runs-on: windows-latest
-
+    runs-on: ubuntu-latest
     steps:
-    - name: 코드가져오기
-      uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: 파이썬 설치하기
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
 
-    - name: 필수 라이브러리 설치하기
-      run: |
-        python -m pip install --upgrade pip
-        pip install pandas openpyxl matplotlib pyinstaller
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-tk tk-dev xvfb
 
-    - name: EXE 파일로 빌드하기
-      run: pyinstaller --noconsole --onefile reliability_analyzer.py
+      - name: Install Python Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install numpy pandas matplotlib openpyxl
 
-    - name: 완성된 EXE 파일 추출하기
-      uses: actions/upload-artifact@v4
-      with:
-        name: Reliability_Analyzer_Program
-        path: dist/reliability_analyzer.exe
+      - name: Test Build compilation
+        run: |
+          xvfb-run python -m py_compile reliability_analyzer.py
